@@ -1,13 +1,16 @@
 """
 OpenAI Chat Completions compatibility helpers.
 
-This module keeps existing behavior for legacy models/providers while
-gracefully adapting request parameters for GPT-5 family models.
+This module builds capped Chat Completions requests for local and optional
+remote providers, while adapting parameters for GPT-5 family models.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+
+from ..config import Config
+from .run_budget import BudgetExceeded
 
 
 def is_gpt5_family(model: Optional[str]) -> bool:
@@ -15,6 +18,32 @@ def is_gpt5_family(model: Optional[str]) -> bool:
     if not model:
         return False
     return model.strip().lower().startswith("gpt-5")
+
+
+def is_budget_exceeded_error(error: BaseException) -> bool:
+    """Recognize budget exhaustion and accounting failures that must stop a run.
+
+    Other HTTP 429 errors retain their ordinary provider meaning.
+    """
+    seen: set[int] = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, BudgetExceeded):
+            return True
+        status = getattr(current, 'status_code', None)
+        if status in {429, 502, 503}:
+            body = getattr(current, 'body', None)
+            details = body.get('error', body) if isinstance(body, dict) else None
+            code = details.get('code') if isinstance(details, dict) else None
+            if code in {'budget_exceeded', 'budget_accounting_error'}:
+                return True
+            response = getattr(current, 'response', None)
+            headers = getattr(response, 'headers', None)
+            if status == 429 and headers and headers.get('X-MiroFish-Budget-Exceeded') == '1':
+                return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def create_chat_completion(
@@ -31,8 +60,8 @@ def create_chat_completion(
 
     Compatibility strategy:
     - For GPT-5 family, avoid sending temperature by default.
-    - For token limit, use `max_completion_tokens` on GPT-5, `max_tokens` otherwise.
-    - Preserve the legacy request shape for every non-GPT-5 model/provider.
+    - Every request has an output cap, including callers that pass None.
+    - Use `max_completion_tokens` on GPT-5, `max_tokens` otherwise.
     - Propagate provider errors unchanged instead of guessing from message text.
     """
     kwargs: Dict[str, Any] = {
@@ -48,11 +77,16 @@ def create_chat_completion(
     if temperature is not None and not gpt5_family:
         kwargs["temperature"] = temperature
 
-    if max_tokens is not None:
-        if gpt5_family:
-            kwargs["max_completion_tokens"] = max_tokens
-        else:
-            kwargs["max_tokens"] = max_tokens
+    output_cap = Config.LLM_MAX_OUTPUT_TOKENS
+    if output_cap < 1:
+        raise ValueError('LLM_MAX_OUTPUT_TOKENS must be positive')
+    if max_tokens is not None and max_tokens < 1:
+        raise ValueError('max_tokens must be positive')
+    output_cap = min(max_tokens, output_cap) if max_tokens is not None else output_cap
+    if gpt5_family:
+        kwargs["max_completion_tokens"] = output_cap
+    else:
+        kwargs["max_tokens"] = output_cap
 
     return client.chat.completions.create(**kwargs)
 

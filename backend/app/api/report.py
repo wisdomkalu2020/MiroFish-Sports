@@ -14,6 +14,13 @@ from ..services.report_agent import ReportAgent, ReportManager, ReportStatus
 from ..services.simulation_manager import SimulationManager
 from ..services.simulation_runner import SimulationRunner, RunnerStatus
 from ..services.zep_graph_memory_updater import ZepGraphMemoryManager
+from ..sports.agent_layer import (
+    SportsAgentError,
+    get_or_collect_sports_forecast,
+    is_sports_dossier,
+    validate_forecast_context,
+)
+from ..sports.forecast_context import ForecastContextError, load_forecast_context
 from ..models.project import ProjectManager, ProjectStatus
 from ..models.task import TaskManager, TaskStatus
 from ..utils.logger import get_logger
@@ -151,6 +158,18 @@ def generate_report():
                 "success": False,
                 "error": t('api.missingSimRequirement')
             }), 400
+
+        dossier_text = ProjectManager.get_extracted_text(project.project_id)
+        if is_sports_dossier(dossier_text):
+            try:
+                validate_forecast_context(
+                    load_forecast_context(project.project_id),
+                    project_id=project.project_id,
+                    simulation_id=simulation_id,
+                    dossier_text=dossier_text,
+                )
+            except (SportsAgentError, ForecastContextError) as error:
+                return jsonify({"success": False, "error": str(error)}), 409
         
         # 提前生成 report_id，以便立即返回给前端
         import uuid
@@ -252,11 +271,18 @@ def generate_report():
                         message=t('api.initReportAgent')
                     )
 
-                    agent = ReportAgent(
+                    sports_forecast = get_or_collect_sports_forecast(
+                        project_id=project.project_id,
+                        simulation_id=simulation_id,
+                    )
+                    agent_kwargs = dict(
                         graph_id=graph_id,
                         simulation_id=simulation_id,
-                        simulation_requirement=simulation_requirement
+                        simulation_requirement=simulation_requirement,
                     )
+                    if sports_forecast is not None:
+                        agent_kwargs["sports_forecast"] = sports_forecast
+                    agent = ReportAgent(**agent_kwargs)
 
                     def progress_callback(stage, progress, message):
                         task_manager.update_task(

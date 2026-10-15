@@ -23,6 +23,7 @@ from ..utils.logger import get_logger
 from ..utils.locale import t, get_locale, set_locale
 from ..utils.zep_lifecycle import get_graph_readers, graph_lifecycle_lock
 from ..models.project import ProjectManager
+from ..utils.local_llm_runtime import local_model_run
 
 logger = get_logger('mirofish.api.simulation')
 
@@ -1464,11 +1465,21 @@ def generate_profiles():
                 "error": t('api.noMatchingEntities')
             }), 400
         
-        generator = OasisProfileGenerator()
-        profiles = generator.generate_profiles_from_entities(
-            entities=filtered.entities,
-            use_llm=use_llm
-        )
+        llm_scope = nullcontext()
+        if Config.LLM_PROVIDER == 'local':
+            projects = ProjectManager.find_projects_by_graph_id(graph_id)
+            if len(projects) != 1:
+                return jsonify({
+                    "success": False,
+                    "error": "Exactly one MiroFish project must own this graph for budgeted profile generation"
+                }), 409
+            llm_scope = local_model_run(projects[0].project_id)
+        with llm_scope:
+            generator = OasisProfileGenerator()
+            profiles = generator.generate_profiles_from_entities(
+                entities=filtered.entities,
+                use_llm=use_llm
+            )
         
         if platform == "reddit":
             profiles_data = [p.to_reddit_format() for p in profiles]

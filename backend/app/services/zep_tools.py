@@ -17,6 +17,7 @@ from zep_cloud import NotFoundError
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.llm_client import LLMClient
+from ..utils.openai_chat_compat import is_budget_exceeded_error
 from ..utils.locale import get_locale, t
 from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
 from ..utils.zep import (
@@ -1131,6 +1132,8 @@ class ZepToolsService:
             return [str(sq) for sq in sub_queries[:max_queries]]
             
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.warning(t("console.generateSubQueriesFailed", error=str(e)))
             # 降级：返回基于原问题的变体
             return [
@@ -1623,6 +1626,8 @@ class ZepToolsService:
             return selected_agents, valid_indices, reasoning
             
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.warning(t("console.llmSelectAgentFailed", error=e))
             # 降级：选择前N个
             selected = profiles[:max_agents]
@@ -1671,6 +1676,8 @@ class ZepToolsService:
             return response.get("questions", [f"关于{interview_requirement}，您有什么看法？"])
             
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.warning(t("console.generateInterviewQuestionsFailed", error=e))
             return [
                 f"关于{interview_requirement}，您的观点是什么？",
@@ -1729,6 +1736,8 @@ class ZepToolsService:
             return summary
             
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.warning(t("console.generateInterviewSummaryFailed", error=e))
             # 降级：简单拼接
             return f"共采访了{len(interviews)}位受访者，包括：" + "、".join([i.agent_name for i in interviews])

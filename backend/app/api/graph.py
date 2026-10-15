@@ -26,6 +26,8 @@ from ..services.simulation_manager import SimulationManager
 from ..services.simulation_runner import SimulationRunner, RunnerStatus
 from ..services.zep_graph_memory_updater import ZepGraphMemoryManager
 from ..utils.llm_client import LLMResponseError
+from ..utils.local_llm_runtime import local_model_run
+from ..utils.run_budget import BudgetExceeded
 
 # 获取日志器
 logger = get_logger('mirofish.api')
@@ -358,12 +360,17 @@ def generate_ontology():
         
         # 生成本体
         logger.info("调用 LLM 生成本体定义...")
-        generator = OntologyGenerator()
-        ontology = generator.generate(
-            document_texts=document_texts,
-            simulation_requirement=simulation_requirement,
-            additional_context=additional_context if additional_context else None
+        llm_scope = (
+            local_model_run(project.project_id)
+            if Config.LLM_PROVIDER == 'local' else nullcontext()
         )
+        with llm_scope:
+            generator = OntologyGenerator()
+            ontology = generator.generate(
+                document_texts=document_texts,
+                simulation_requirement=simulation_requirement,
+                additional_context=additional_context if additional_context else None
+            )
         
         # 保存本体到项目
         entity_count = len(ontology.get("entity_types", []))
@@ -395,7 +402,11 @@ def generate_ontology():
         provider_status = getattr(error, "status_code", None)
         request_id = getattr(error, "request_id", None)
 
-        if isinstance(error, LLMResponseError):
+        if isinstance(error, BudgetExceeded):
+            public_error = "Local model run budget exhausted"
+            response_status = 429
+            logger.info("Ontology run budget exhausted for project %s", project.project_id if project else "unknown")
+        elif isinstance(error, LLMResponseError):
             public_error = str(error)
             response_status = 502
             logger.exception("LLM returned an unusable ontology response")

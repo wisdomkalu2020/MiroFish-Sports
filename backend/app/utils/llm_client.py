@@ -97,16 +97,14 @@ class LLMClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None
     ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model = model or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY 未配置")
+        self.api_key, self.base_url, self.model = Config.resolve_llm_settings(
+            api_key=api_key, base_url=base_url, model=model
+        )
         
         self.client = OpenAI(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=self.base_url,
+            **({'max_retries': 0} if Config.LLM_PROVIDER == 'local' else {}),
         )
 
     def _create_completion(
@@ -179,7 +177,6 @@ class LLMClient:
             raise ValueError("max_attempts must be at least 1")
 
         response_format: Optional[Dict[str, str]] = {"type": "json_object"}
-        request_max_tokens = max_tokens
         last_error: Optional[LLMResponseError] = None
 
         for attempt in range(1, max_attempts + 1):
@@ -191,7 +188,7 @@ class LLMClient:
                     response = self._create_completion(
                         messages=messages,
                         temperature=temperature,
-                        max_tokens=request_max_tokens,
+                        max_tokens=max_tokens,
                         response_format=response_format,
                     )
                 except Exception as error:
@@ -215,16 +212,10 @@ class LLMClient:
                 if attempt >= max_attempts:
                     raise
 
-                # A caller-supplied cap is the common cause of a partial JSON
-                # object. Omit it for the one bounded retry so the provider can
-                # use its model-specific output limit.
-                had_token_cap = request_max_tokens is not None
-                request_max_tokens = None
                 logger.warning(
                     "LLM returned unusable JSON (finish_reason=%s); "
-                    "retrying content generation%s",
+                    "retrying content generation within the output cap",
                     error.finish_reason or "unknown",
-                    " without an output token cap" if had_token_cap else "",
                 )
 
         if last_error is not None:  # pragma: no cover - defensive loop guard

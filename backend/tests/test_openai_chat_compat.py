@@ -5,8 +5,10 @@ import pytest
 from app.utils.openai_chat_compat import (
     create_chat_completion,
     extract_chat_completion_text,
+    is_budget_exceeded_error,
     is_gpt5_family,
 )
+from app.config import Config
 
 
 class CompletionRecorder:
@@ -88,6 +90,35 @@ def test_provider_error_is_propagated_without_guessing_or_retrying():
 
     assert captured.value is provider_error
     assert len(recorder.calls) == 1
+
+
+def test_every_completion_is_capped_even_if_caller_omits_limit(monkeypatch):
+    monkeypatch.setattr(Config, 'LLM_MAX_OUTPUT_TOKENS', 128)
+    recorder = CompletionRecorder()
+
+    create_chat_completion(client_for(recorder), model='local-model', messages=[])
+    create_chat_completion(
+        client_for(recorder), model='local-model', messages=[], max_tokens=500
+    )
+
+    assert [call['max_tokens'] for call in recorder.calls] == [128, 128]
+
+
+def test_budget_error_is_distinct_from_other_rate_limits():
+    error = RuntimeError('budget')
+    error.status_code = 429
+    error.body = {'error': {'code': 'budget_exceeded'}}
+    assert is_budget_exceeded_error(error)
+
+    accounting_error = RuntimeError('accounting failed')
+    accounting_error.status_code = 503
+    accounting_error.body = {'error': {'code': 'budget_accounting_error'}}
+    assert is_budget_exceeded_error(accounting_error)
+
+    rate_limit = RuntimeError('rate limited')
+    rate_limit.status_code = 429
+    rate_limit.body = {'error': {'code': 'rate_limit_exceeded'}}
+    assert not is_budget_exceeded_error(rate_limit)
 
 
 @pytest.mark.parametrize(

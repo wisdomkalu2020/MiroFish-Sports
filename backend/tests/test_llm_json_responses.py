@@ -2,7 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.config import Config
 from app.utils.llm_client import LLMClient, LLMResponseError
+
+
+@pytest.fixture(autouse=True)
+def fixed_output_cap(monkeypatch):
+    monkeypatch.setattr(Config, 'LLM_MAX_OUTPUT_TOKENS', 4096)
 
 
 class CompletionSequence:
@@ -46,7 +52,7 @@ def _client_for(sequence):
     return client
 
 
-def test_chat_json_retries_truncated_completion_without_token_cap():
+def test_chat_json_retries_truncated_completion_with_token_cap():
     sequence = CompletionSequence(
         _response('{"items": [', finish_reason="length"),
         _response('{"items": [1, 2]}'),
@@ -61,10 +67,10 @@ def test_chat_json_retries_truncated_completion_without_token_cap():
 
     assert result == {"items": [1, 2]}
     assert sequence.calls[0]["max_tokens"] == 4096
-    assert "max_tokens" not in sequence.calls[1]
+    assert sequence.calls[1]["max_tokens"] == 4096
 
 
-def test_chat_json_omits_token_cap_when_requested():
+def test_chat_json_uses_safe_cap_when_caller_passes_none():
     sequence = CompletionSequence(_response('{"ok": true}'))
     client = _client_for(sequence)
 
@@ -72,7 +78,7 @@ def test_chat_json_omits_token_cap_when_requested():
         messages=[{"role": "user", "content": "Return JSON"}],
         max_tokens=None,
     ) == {"ok": True}
-    assert "max_tokens" not in sequence.calls[0]
+    assert sequence.calls[0]["max_tokens"] == 4096
 
 
 def test_chat_json_retries_empty_content_once():
@@ -200,7 +206,7 @@ def test_response_format_fallback_keeps_content_retry_available():
     assert sequence.calls[0]["response_format"] == {"type": "json_object"}
     assert "response_format" not in sequence.calls[1]
     assert "response_format" not in sequence.calls[2]
-    assert "max_tokens" not in sequence.calls[2]
+    assert sequence.calls[2]["max_tokens"] == 4096
 
 
 def test_chat_json_defaults_to_one_content_attempt():

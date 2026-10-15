@@ -77,3 +77,20 @@ def test_ontology_generation_does_not_cap_structured_output_tokens():
     assert result["analysis_summary"] == "ok"
     assert llm.calls[0]["max_tokens"] is None
     assert llm.calls[0]["max_attempts"] == 2
+
+
+def test_sports_ontology_prompt_preserves_generic_default():
+    llm = RecordingLLMClient()
+    generator = OntologyGenerator(llm_client=llm)
+
+    generator.generate(["Pre-match dossier"], "Synthetic discussion", domain="sports")
+    sports_call = llm.calls[-1]
+    assert "pre-match sports discussion" in sports_call["messages"][0]["content"]
+    assert "never be presented as a real statement" in sports_call["messages"][0]["content"]
+    assert "social media" not in sports_call["messages"][0]["content"].lower()
+    assert "Unknown sections remain unknown" in sports_call["messages"][1]["content"]
+
+    generator.generate(["Original document"], "Public discussion")
+    generic_call = llm.calls[-1]
+    assert "社交媒体舆论模拟" in generic_call["messages"][0]["content"]
+    assert "pre-match sports discussion" not in generic_call["messages"][0]["content"]

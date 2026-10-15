@@ -21,6 +21,8 @@ from queue import Queue
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_locale, set_locale
+from ..utils.local_llm_runtime import get_local_gateway, release_local_gateway
+from ..sports.agent_layer import is_sports_dossier, sports_round_limit
 from ..utils.zep import (
     ZEP_HTTP_REQUEST_TIMEOUT_SECONDS,
     ZEP_INGESTION_WAIT_TIMEOUT_SECONDS,
@@ -237,6 +239,7 @@ class SimulationRunner:
     _finalization_locks: Dict[str, threading.Lock] = {}
     _finalization_locks_guard = threading.Lock()
     _manual_stop_requests: set[str] = set()
+    _local_gateways: Dict[str, Any] = {}
 
     @classmethod
     def _finalization_lock(cls, simulation_id: str) -> threading.Lock:
@@ -398,6 +401,20 @@ class SimulationRunner:
         
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
+
+        # Sports uses the same OASIS runner, with a small fixed discussion
+        # budget. The generic MiroFish simulation retains its requested span.
+        project_id = config.get("project_id")
+        if isinstance(project_id, str):
+            from ..models.project import ProjectManager
+
+            if is_sports_dossier(ProjectManager.get_extracted_text(project_id)):
+                sports_max = sports_round_limit()
+                max_rounds = min(max_rounds, sports_max) if max_rounds and max_rounds > 0 else sports_max
+
+        # Start the listener only when a child is about to need it. The SQLite
+        # budget was already created during preparation and survives release.
+        local_gateway = None
         
         # 初始化运行状态
         time_config = config.get("time_config", {})
@@ -533,6 +550,12 @@ class SimulationRunner:
             env = os.environ.copy()
             env['PYTHONUTF8'] = '1'  # Python 3.7+ 支持，让所有 open() 默认使用 UTF-8
             env['PYTHONIOENCODING'] = 'utf-8'  # 确保 stdout/stderr 使用 UTF-8
+            if Config.LLM_PROVIDER == 'local':
+                local_gateway = get_local_gateway(simulation_id)
+            if local_gateway is not None:
+                env.update(local_gateway.client_env())
+                env['LLM_PROVIDER'] = 'local'
+                env['LLM_MAX_OUTPUT_TOKENS'] = str(Config.LLM_MAX_OUTPUT_TOKENS)
             
             # 设置工作目录为模拟目录（数据库等文件会生成在此）
             # 使用 start_new_session=True 创建新的进程组，确保可以通过 os.killpg 终止所有子进程
@@ -566,6 +589,8 @@ class SimulationRunner:
                 state.process_pid = process.pid
                 state.runner_status = RunnerStatus.RUNNING
                 cls._processes[simulation_id] = process
+                if local_gateway is not None:
+                    cls._local_gateways[simulation_id] = local_gateway
                 cls._monitor_threads[simulation_id] = monitor_thread
                 cls._save_run_state(state)
                 cls._sync_simulation_status(
@@ -584,6 +609,12 @@ class SimulationRunner:
                 except Exception as error:
                     cleanup_errors.append(f"子进程终止失败: {error}")
             cls._processes.pop(simulation_id, None)
+            cls._local_gateways.pop(simulation_id, None)
+            if local_gateway is not None and (process is None or process.poll() is not None):
+                try:
+                    release_local_gateway(simulation_id, expected=local_gateway)
+                except Exception as error:
+                    cleanup_errors.append(f"OASIS model listener cleanup failed: {error}")
             cls._monitor_threads.pop(simulation_id, None)
             cls._action_queues.pop(simulation_id, None)
             cls._stdout_files.pop(simulation_id, None)
@@ -639,6 +670,16 @@ class SimulationRunner:
         exit_code: int | None = None
         try:
             while process.poll() is None:  # 进程仍在运行
+                gateway = cls._local_gateways.get(simulation_id)
+                if gateway is not None:
+                    try:
+                        budget_exhausted = gateway.budget.snapshot()['exhausted']
+                    except Exception:
+                        budget_exhausted = True
+                    if budget_exhausted:
+                        monitor_error = RuntimeError("Per-run local model budget exhausted or unreadable")
+                        cls._terminate_process(process, simulation_id)
+                        break
                 # 读取 Twitter 动作日志
                 if os.path.exists(twitter_actions_log):
                     twitter_position = cls._read_action_log(
@@ -676,6 +717,16 @@ class SimulationRunner:
                 if latest_state is not None:
                     state = latest_state
 
+                # Release before publishing a terminal state. A new start for
+                # this simulation ID cannot acquire the finalization lock and
+                # accidentally inherit a listener the old monitor will close.
+                gateway = cls._local_gateways.pop(simulation_id, None)
+                if gateway is not None:
+                    try:
+                        release_local_gateway(simulation_id, expected=gateway)
+                    except Exception as error:
+                        logger.error("Could not release OASIS model listener: %s", error)
+
                 if state.runner_status not in {
                     RunnerStatus.STOPPED,
                     RunnerStatus.FAILED,
@@ -703,6 +754,13 @@ class SimulationRunner:
                         error_message = (
                             f"进程退出码: {exit_code}, 错误: {error_info}"
                         )
+                    gateway = cls._local_gateways.get(simulation_id)
+                    if not manual_stop and gateway is not None:
+                        try:
+                            gateway.budget.ensure_settled()
+                        except Exception as error:
+                            desired_status = RunnerStatus.FAILED
+                            error_message = f"Local model budget exhausted or unsettled: {error}"
 
                     state.twitter_running = False
                     state.reddit_running = False
@@ -1060,6 +1118,10 @@ class SimulationRunner:
                             state.error,
                         )
                         raise RuntimeError(state.error) from error
+                gateway = cls._local_gateways.get(simulation_id)
+                if gateway is not None and (process is None or process.poll() is not None):
+                    release_local_gateway(simulation_id, expected=gateway)
+                    cls._local_gateways.pop(simulation_id, None)
                 state.runner_status = RunnerStatus.STOPPED
                 state.twitter_running = False
                 state.reddit_running = False

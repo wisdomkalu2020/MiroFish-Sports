@@ -38,6 +38,7 @@ yarn-error.log*
 
 # 测试
 .pytest_cache/
+pytest-cache-files-*/
 .coverage
 htmlcov/
 

@@ -11,7 +11,7 @@ OASIS Agent Profile生成器
 import json
 import random
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -19,7 +19,11 @@ from openai import OpenAI
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, get_locale, set_locale, t
-from ..utils.openai_chat_compat import create_chat_completion, extract_chat_completion_text
+from ..utils.openai_chat_compat import (
+    create_chat_completion,
+    extract_chat_completion_text,
+    is_budget_exceeded_error,
+)
 from ..utils.zep import (
     call_zep_read_with_retry,
     get_zep_client,
@@ -248,16 +252,14 @@ class OasisProfileGenerator:
         zep_api_key: Optional[str] = None,
         graph_id: Optional[str] = None
     ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model_name = model_name or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY 未配置")
+        self.api_key, self.base_url, self.model_name = Config.resolve_llm_settings(
+            api_key=api_key, base_url=base_url, model=model_name
+        )
         
         self.client = OpenAI(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=self.base_url,
+            **({'max_retries': 0} if Config.LLM_PROVIDER == 'local' else {}),
         )
         
         # Zep客户端用于检索丰富上下文
@@ -579,7 +581,7 @@ class OasisProfileGenerator:
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.7 - (attempt * 0.1),  # 每次重试降低温度
-                    # 不设置max_tokens，让LLM自由发挥
+                    max_tokens=Config.LLM_MAX_OUTPUT_TOKENS,
                 )
                 
                 content = extract_chat_completion_text(response)
@@ -614,6 +616,8 @@ class OasisProfileGenerator:
                     last_error = je
                     
             except Exception as e:
+                if is_budget_exceeded_error(e):
+                    raise
                 logger.warning(f"LLM调用失败 (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e
                 import time
@@ -900,7 +904,8 @@ class OasisProfileGenerator:
         graph_id: Optional[str] = None,
         parallel_count: int = 5,
         realtime_output_path: Optional[str] = None,
-        output_platform: str = "reddit"
+        output_platform: str = "reddit",
+        profile_transform: Optional[Callable[[OasisAgentProfile, int], None]] = None,
     ) -> List[OasisAgentProfile]:
         """
         批量从实体生成Agent Profile（支持并行生成）
@@ -974,13 +979,20 @@ class OasisProfileGenerator:
                     user_id=idx,
                     use_llm=use_llm
                 )
+                if profile_transform is not None:
+                    profile_transform(profile, idx + 1)
                 
                 # 实时输出生成的人设到控制台和日志
-                self._print_generated_profile(entity.name, entity_type, profile)
+                self._print_generated_profile(
+                    profile.name if profile_transform is not None else entity.name,
+                    entity_type, profile,
+                )
                 
                 return idx, profile, None
                 
             except Exception as e:
+                if is_budget_exceeded_error(e):
+                    raise
                 logger.error(f"生成实体 {entity.name} 的人设失败: {str(e)}")
                 # 创建一个基础profile
                 fallback_profile = OasisAgentProfile(
@@ -992,6 +1004,8 @@ class OasisProfileGenerator:
                     source_entity_uuid=entity.uuid,
                     source_entity_type=entity_type,
                 )
+                if profile_transform is not None:
+                    profile_transform(fallback_profile, idx + 1)
                 return idx, fallback_profile, str(e)
         
         logger.info(f"开始并行生成 {total} 个Agent人设（并行数: {parallel_count}）...")
@@ -1036,6 +1050,8 @@ class OasisProfileGenerator:
                         logger.info(f"[{current}/{total}] 成功生成人设: {entity.name} ({entity_type})")
                         
                 except Exception as e:
+                    if is_budget_exceeded_error(e):
+                        raise
                     logger.error(f"处理实体 {entity.name} 时发生异常: {str(e)}")
                     with lock:
                         completed_count[0] += 1

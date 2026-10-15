@@ -20,8 +20,10 @@ from enum import Enum
 
 from ..config import Config
 from ..utils.llm_client import LLMClient
+from ..utils.openai_chat_compat import is_budget_exceeded_error
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, t
+from ..sports.agent_layer import label_synthetic_report, render_sports_forecast_section
 from .zep_tools import (
     ZepToolsService, 
     SearchResult, 
@@ -893,7 +895,8 @@ class ReportAgent:
         simulation_id: str,
         simulation_requirement: str,
         llm_client: Optional[LLMClient] = None,
-        zep_tools: Optional[ZepToolsService] = None
+        zep_tools: Optional[ZepToolsService] = None,
+        sports_forecast: Optional[Dict[str, Any]] = None,
     ):
         """
         初始化Report Agent
@@ -907,10 +910,49 @@ class ReportAgent:
         """
         self.graph_id = graph_id
         self.simulation_id = simulation_id
-        self.simulation_requirement = simulation_requirement
+        self.sports_forecast = sports_forecast
+        if sports_forecast is None:
+            self.simulation_requirement = simulation_requirement
+        else:
+            # The generic ReportAgent still plans, researches Zep, and writes
+            # the narrative. Give it the validated figures and an explicit
+            # evidence rule; exact numbers are added deterministically below.
+            summary = {
+                "baseline_probabilities": sports_forecast["baseline_probabilities"],
+                "consensus_adjustments": sports_forecast["consensus"]["adjustments"],
+                "final_probabilities": sports_forecast["final_probabilities"],
+                "cutoff_at": sports_forecast["cutoff_at"],
+                "data_freshness_warnings": sports_forecast["data_freshness_warnings"],
+            }
+            self.simulation_requirement = (
+                simulation_requirement + "\n\nSports forecast data: "
+                + json.dumps(summary, ensure_ascii=False)
+                + "\nUse only pre-cutoff dossier facts as factual evidence. "
+                "OASIS messages and agent votes are synthetic analytical views, "
+                "never real statements from coaches or players. Do not imply "
+                "that prediction accuracy or profit has been validated."
+            )
         
-        self.llm = llm_client or LLMClient()
-        self.zep_tools = zep_tools or ZepToolsService()
+        if llm_client is not None:
+            self.llm = llm_client
+        elif Config.LLM_PROVIDER == 'local':
+            from ..utils.local_llm_context import use_llm_settings
+            from ..utils.local_llm_runtime import get_local_gateway
+
+            gateway = get_local_gateway(simulation_id, report=True)
+            with use_llm_settings({
+                'api_key': gateway.api_key,
+                'base_url': gateway.base_url,
+                'model': gateway.model,
+            }):
+                self.llm = LLMClient(
+                    api_key=gateway.api_key,
+                    base_url=gateway.base_url,
+                    model=gateway.model,
+                )
+        else:
+            self.llm = LLMClient(model=Config.LLM_REPORT_MODEL_NAME)
+        self.zep_tools = zep_tools or ZepToolsService(llm_client=self.llm)
         
         # 工具定义
         self.tools = self._define_tools()
@@ -1064,6 +1106,8 @@ class ReportAgent:
                 return f"未知工具: {tool_name}。请使用以下工具之一: insight_forge, panorama_search, quick_search"
                 
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.error(t('report.toolExecFailed', toolName=tool_name, error=str(e)))
             return f"工具执行失败: {str(e)}"
     
@@ -1245,6 +1289,8 @@ class ReportAgent:
             return outline
             
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.error(t('report.outlinePlanFailed', error=str(e)))
             # 返回默认大纲（3个章节，作为fallback）
             return ReportOutline(
@@ -1749,6 +1795,17 @@ class ReportAgent:
             
             # 使用ReportManager组装完整报告
             report.markdown_content = ReportManager.assemble_full_report(report_id, outline)
+            if self.sports_forecast is not None:
+                report.markdown_content = label_synthetic_report(report.markdown_content)
+                if Config.LLM_PROVIDER == "local":
+                    from ..utils.local_llm_runtime import local_run_budget_snapshot
+
+                    self.sports_forecast["total_run_tokens_at_report"] = (
+                        local_run_budget_snapshot(self.simulation_id)["spent_tokens"]
+                    )
+                report.markdown_content += "\n\n" + render_sports_forecast_section(
+                    self.sports_forecast
+                )
             report.status = ReportStatus.COMPLETED
             report.completed_at = datetime.now().isoformat()
             

@@ -1,3 +1,5 @@
+> **[MiroFish](https://github.com/666ghj/MiroFish) 的非官方体育预测扩展。** 本仓库在原有 MiroFish 工作流程中加入 EPL、NPFL 和 NBA 的预测与评估，保留原项目署名及 AGPL-3.0 许可证。智能体能否提高预测质量尚未经过实测。
+
 <div align="center">
 
 <img src="./static/image/MiroFish_logo_compressed.jpeg" alt="MiroFish Logo" width="75%"/>

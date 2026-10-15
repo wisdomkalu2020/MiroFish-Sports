@@ -18,6 +18,13 @@ from .zep_entity_reader import ZepEntityReader, FilteredEntities
 from .oasis_profile_generator import OasisProfileGenerator, OasisAgentProfile
 from .simulation_config_generator import SimulationConfigGenerator, SimulationParameters
 from ..utils.locale import t
+from ..utils.local_llm_runtime import budgeted_simulation_prepare
+from ..sports.agent_layer import (
+    is_sports_dossier,
+    mark_synthetic_profile,
+    mark_synthetic_profiles,
+    select_sports_entities,
+)
 
 logger = get_logger('mirofish.simulation')
 
@@ -241,6 +248,7 @@ class SimulationManager:
         
         return state
     
+    @budgeted_simulation_prepare
     def prepare_simulation(
         self,
         simulation_id: str,
@@ -302,25 +310,30 @@ class SimulationManager:
                 enrich_with_edges=True
             )
             
-            state.entities_count = filtered.filtered_count
+            sports_run = is_sports_dossier(document_text)
+            entities = (
+                select_sports_entities(filtered.entities)
+                if sports_run else filtered.entities
+            )
+            state.entities_count = len(entities)
             state.entity_types = list(filtered.entity_types)
             
             if progress_callback:
                 progress_callback(
                     "reading", 100,
-                    t('progress.readingComplete', count=filtered.filtered_count),
-                    current=filtered.filtered_count,
-                    total=filtered.filtered_count
+                    t('progress.readingComplete', count=len(entities)),
+                    current=len(entities),
+                    total=len(entities)
                 )
             
-            if filtered.filtered_count == 0:
+            if not entities:
                 state.status = SimulationStatus.FAILED
                 state.error = "没有找到符合条件的实体，请检查图谱是否正确构建"
                 self._save_simulation_state(state)
                 raise ValueError(state.error)
             
             # ========== 阶段2: 生成Agent Profile ==========
-            total_entities = len(filtered.entities)
+            total_entities = len(entities)
             
             if progress_callback:
                 progress_callback(
@@ -353,16 +366,27 @@ class SimulationManager:
             elif state.enable_twitter:
                 realtime_output_path = os.path.join(sim_dir, "twitter_profiles.csv")
                 realtime_platform = "twitter"
+            if sports_run:
+                # The generator's live file would briefly expose the raw
+                # entity name before we can add the synthetic label.
+                realtime_output_path = None
             
             profiles = generator.generate_profiles_from_entities(
-                entities=filtered.entities,
+                entities=entities,
                 use_llm=use_llm_for_profiles,
                 progress_callback=profile_progress,
                 graph_id=state.graph_id,  # 传入graph_id用于Zep检索
                 parallel_count=parallel_profile_count,  # 并行生成数量
                 realtime_output_path=realtime_output_path,  # 实时保存路径
-                output_platform=realtime_platform  # 输出格式
+                output_platform=realtime_platform,  # 输出格式
+                profile_transform=mark_synthetic_profile if sports_run else None,
             )
+
+            if sports_run:
+                # The ordinary persona generator remains the source of each
+                # profile, but OASIS must not display simulated text as a real
+                # coach's or player's statement.
+                mark_synthetic_profiles(profiles)
             
             state.profiles_count = len(profiles)
             state.profiles_generated = len(profiles) > 0
@@ -426,10 +450,34 @@ class SimulationManager:
                 graph_id=state.graph_id,
                 simulation_requirement=simulation_requirement,
                 document_text=document_text,
-                entities=filtered.entities,
+                entities=entities,
                 enable_twitter=state.enable_twitter,
                 enable_reddit=state.enable_reddit
             )
+
+            if sports_run:
+                for agent_config in sim_params.agent_configs:
+                    agent_id = agent_config.agent_id
+                    if isinstance(agent_id, int) and 0 <= agent_id < len(profiles):
+                        agent_config.entity_name = profiles[agent_id].name
+                # Use only the verified seed text for sports event setup. The
+                # generic LLM configuration step still runs for all domains.
+                sim_params.event_config.initial_posts = [{
+                    "content": (
+                        "Synthetic pre-match discussion. This is not a statement "
+                        "by a real coach, player, referee, or team. Discuss only "
+                        "the following dossier known by the cutoff:\n\n"
+                        + document_text[:1800]
+                    ),
+                    "poster_type": "Synthetic analyst",
+                    "poster_agent_id": 0,
+                }]
+                sim_params.event_config.scheduled_events = []
+                sim_params.event_config.narrative_direction = (
+                    "Synthetic pre-match analysis only. Treat OASIS posts as "
+                    "fictional discussion, never as new factual evidence or "
+                    "real statements by coaches or players."
+                )
             
             if progress_callback:
                 progress_callback(

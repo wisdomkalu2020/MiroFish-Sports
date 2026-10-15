@@ -191,6 +191,14 @@ B. **具体类型（8个，根据文本内容设计）**：
 """
 
 
+SPORTS_ONTOLOGY_SYSTEM_PROMPT = """Design a knowledge-graph ontology for a synthetic pre-match sports discussion based only on the supplied match dossier. The dossier's cutoff is a hard boundary: do not infer facts that were not documented as known by then. Coaches, players, referees and teams may appear as factual graph entities, but any subsequent simulated agent speech is synthetic and must never be presented as a real statement by those people or organizations.
+
+Return one valid JSON object and no other text, using the existing MiroFish ontology schema:
+{"entity_types": [{"name": "PascalCaseType", "description": "English description under 100 characters", "attributes": [{"name": "snake_case_attribute", "type": "text", "description": "English description"}], "examples": ["dossier example"]}], "edge_types": [{"name": "UPPER_SNAKE_CASE", "description": "English description under 100 characters", "source_targets": [{"source": "PascalCaseType", "target": "PascalCaseType"}], "attributes": []}], "analysis_summary": "Brief summary"}
+
+Produce exactly 10 entity types. Use eight specific sports types suitable for the dossier, covering teams, coaches, players, squads, referees, venues, matches and competitions where supported. The last two types must be Person and Organization as fallbacks. Types are classifications, not permission to invent missing people, lineups, injuries or results. Give each type 1-3 useful attributes, excluding reserved attribute names name, uuid, group_id, graph_id, created_at and summary. Produce 6-10 factual relationship types such as COACHES, PLAYS_FOR, PLAYS_AT, OFFICIATES and COMPETES_IN, each with source_targets referencing your entity types. Avoid claims of real conversations, predictions, betting certainty or post-cutoff events."""
+
+
 class OntologyGenerator:
     """
     本体生成器
@@ -204,7 +212,8 @@ class OntologyGenerator:
         self,
         document_texts: List[str],
         simulation_requirement: str,
-        additional_context: Optional[str] = None
+        additional_context: Optional[str] = None,
+        domain: str = "generic",
     ) -> Dict[str, Any]:
         """
         生成本体定义
@@ -218,14 +227,18 @@ class OntologyGenerator:
             本体定义（entity_types, edge_types等）
         """
         # 构建用户消息
+        if domain not in {"generic", "sports"}:
+            raise ValueError("Unknown ontology domain")
         user_message = self._build_user_message(
             document_texts, 
             simulation_requirement,
-            additional_context
+            additional_context,
+            domain=domain,
         )
         
         lang_instruction = get_language_instruction()
-        system_prompt = f"{ONTOLOGY_SYSTEM_PROMPT}\n\n{lang_instruction}\nIMPORTANT: Entity type names MUST be in English PascalCase (e.g., 'PersonEntity', 'MediaOrganization'). Relationship type names MUST be in English UPPER_SNAKE_CASE (e.g., 'WORKS_FOR'). Attribute names MUST be in English snake_case. Only description fields and analysis_summary should use the specified language above."
+        domain_prompt = SPORTS_ONTOLOGY_SYSTEM_PROMPT if domain == "sports" else ONTOLOGY_SYSTEM_PROMPT
+        system_prompt = f"{domain_prompt}\n\n{lang_instruction}\nIMPORTANT: Entity type names MUST be in English PascalCase (e.g., 'PersonEntity', 'MediaOrganization'). Relationship type names MUST be in English UPPER_SNAKE_CASE (e.g., 'WORKS_FOR'). Attribute names MUST be in English snake_case. Only description fields and analysis_summary should use the specified language above."
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message}
@@ -258,7 +271,8 @@ class OntologyGenerator:
         self,
         document_texts: List[str],
         simulation_requirement: str,
-        additional_context: Optional[str]
+        additional_context: Optional[str],
+        domain: str = "generic",
     ) -> str:
         """构建用户消息"""
         
@@ -280,6 +294,15 @@ class OntologyGenerator:
 {additional_context}
 """
         
+        if domain == "sports":
+            message += """
+Design graph entity and relationship types for this pre-match sports dossier.
+Use only facts proven available by its cutoff. Unknown sections remain unknown.
+Provide exactly 10 entity types; the last two are Person and Organization.
+The graph supports a synthetic discussion, not real statements by named people.
+"""
+            return message
+
         message += """
 请根据以上内容，设计适合社会舆论模拟的实体类型和关系类型。
 

@@ -24,6 +24,8 @@ import sys
 import sqlite3
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+from urllib.parse import urlsplit
+from ipaddress import ip_address
 
 # 全局变量：用于信号处理
 _shutdown_event = None
@@ -40,11 +42,11 @@ sys.path.insert(0, _backend_dir)
 from dotenv import load_dotenv
 _env_file = os.path.join(_project_root, '.env')
 if os.path.exists(_env_file):
-    load_dotenv(_env_file)
+    load_dotenv(_env_file, override=False)
 else:
     _backend_env = os.path.join(_backend_dir, '.env')
     if os.path.exists(_backend_env):
-        load_dotenv(_backend_env)
+        load_dotenv(_backend_env, override=False)
 
 
 import re
@@ -65,20 +67,6 @@ class UnicodeFormatter(logging.Formatter):
                 return match.group(0)
         
         return self.UNICODE_ESCAPE_PATTERN.sub(replace_unicode, result)
-
-
-class MaxTokensWarningFilter(logging.Filter):
-    """过滤掉 camel-ai 关于 max_tokens 的警告（我们故意不设置 max_tokens，让模型自行决定）"""
-    
-    def filter(self, record):
-        # 过滤掉包含 max_tokens 警告的日志
-        if "max_tokens" in record.getMessage() and "Invalid or missing" in record.getMessage():
-            return False
-        return True
-
-
-# 在模块加载时立即添加过滤器，确保在 camel 代码执行前生效
-logging.getLogger().addFilter(MaxTokensWarningFilter())
 
 
 def setup_oasis_logging(log_dir: str):
@@ -432,38 +420,43 @@ class RedditSimulationRunner:
         return os.path.join(self.simulation_dir, "reddit_simulation.db")
     
     def _create_model(self):
-        """
-        创建LLM模型
-        
-        统一使用项目根目录 .env 文件中的配置（优先级最高）：
-        - LLM_API_KEY: API密钥
-        - LLM_BASE_URL: API基础URL
-        - LLM_MODEL_NAME: 模型名称
-        """
-        # 优先从 .env 读取配置
-        llm_api_key = os.environ.get("LLM_API_KEY", "")
-        llm_base_url = os.environ.get("LLM_BASE_URL", "")
-        llm_model = os.environ.get("LLM_MODEL_NAME", "")
-        
-        # 如果 .env 中没有，则使用 config 作为备用
-        if not llm_model:
-            llm_model = self.config.get("llm_model", "gpt-4o-mini")
-        
-        # 设置 camel-ai 所需的环境变量
-        if llm_api_key:
-            os.environ["OPENAI_API_KEY"] = llm_api_key
-        
-        if not os.environ.get("OPENAI_API_KEY"):
-            raise ValueError("缺少 API Key 配置，请在项目根目录 .env 文件中设置 LLM_API_KEY")
-        
-        if llm_base_url:
-            os.environ["OPENAI_API_BASE_URL"] = llm_base_url
-        
-        print(f"LLM配置: model={llm_model}, base_url={llm_base_url[:40] if llm_base_url else '默认'}...")
-        
+        """Route OASIS through the configured local, budgeted LLM endpoint."""
+        llm_api_key = os.environ.get("LLM_API_KEY", "").strip()
+        llm_base_url = os.environ.get("LLM_BASE_URL", "").strip().rstrip("/")
+        llm_model = os.environ.get("LLM_MODEL_NAME", "").strip()
+        if not all((llm_api_key, llm_base_url, llm_model)):
+            raise ValueError("LLM_API_KEY, LLM_BASE_URL and LLM_MODEL_NAME are required for OASIS")
+        gateway_token = os.environ.get("MIROFISH_LOCAL_GATEWAY_TOKEN", "").strip()
+        if not gateway_token or llm_api_key != gateway_token:
+            raise ValueError("OASIS requires the authenticated MiroFish run budget gateway")
+
+        parsed = urlsplit(llm_base_url)
+        host = parsed.hostname or ""
+        try:
+            loopback = host == "localhost" or ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if parsed.scheme != "http" or not loopback or parsed.path != "/v1" or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("OASIS LLM_BASE_URL must be a loopback http://.../v1 endpoint")
+
+        try:
+            max_tokens = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "512"))
+        except ValueError as exc:
+            raise ValueError("LLM_MAX_OUTPUT_TOKENS must be an integer") from exc
+        if not 1 <= max_tokens <= 4096:
+            raise ValueError("LLM_MAX_OUTPUT_TOKENS must be between 1 and 4096")
+
+        os.environ["OPENAI_API_KEY"] = llm_api_key
+        os.environ["OPENAI_BASE_URL"] = llm_base_url
+        os.environ["OPENAI_API_BASE_URL"] = llm_base_url
+        print(f"OASIS local model={llm_model}, base_url={llm_base_url}")
         return ModelFactory.create(
-            model_platform=ModelPlatformType.OPENAI,
+            model_platform=ModelPlatformType.OPENAI_COMPATIBLE_MODEL,
             model_type=llm_model,
+            url=llm_base_url,
+            api_key=llm_api_key,
+            model_config_dict={"max_tokens": max_tokens},
+            max_retries=0,
         )
     
     def _get_active_agents_for_round(

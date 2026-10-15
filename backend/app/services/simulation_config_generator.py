@@ -21,7 +21,11 @@ from openai import OpenAI
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, t
-from ..utils.openai_chat_compat import create_chat_completion, extract_chat_completion_text
+from ..utils.openai_chat_compat import (
+    create_chat_completion,
+    extract_chat_completion_text,
+    is_budget_exceeded_error,
+)
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
 logger = get_logger('mirofish.simulation_config')
@@ -229,16 +233,14 @@ class SimulationConfigGenerator:
         base_url: Optional[str] = None,
         model_name: Optional[str] = None
     ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model_name = model_name or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY 未配置")
+        self.api_key, self.base_url, self.model_name = Config.resolve_llm_settings(
+            api_key=api_key, base_url=base_url, model=model_name
+        )
         
         self.client = OpenAI(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=self.base_url,
+            **({'max_retries': 0} if Config.LLM_PROVIDER == 'local' else {}),
         )
     
     def generate_config(
@@ -450,7 +452,7 @@ class SimulationConfigGenerator:
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.7 - (attempt * 0.1),  # 每次重试降低温度
-                    # 不设置max_tokens，让LLM自由发挥
+                    max_tokens=Config.LLM_MAX_OUTPUT_TOKENS,
                 )
                 
                 content = extract_chat_completion_text(response)
@@ -475,6 +477,8 @@ class SimulationConfigGenerator:
                     last_error = e
                     
             except Exception as e:
+                if is_budget_exceeded_error(e):
+                    raise
                 logger.warning(f"LLM调用失败 (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e
                 import time
@@ -593,6 +597,8 @@ class SimulationConfigGenerator:
         try:
             return self._call_llm_with_retry(prompt, system_prompt)
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.warning(f"时间配置LLM生成失败: {e}, 使用默认配置")
             return self._get_default_time_config(num_entities)
     
@@ -710,6 +716,8 @@ class SimulationConfigGenerator:
         try:
             return self._call_llm_with_retry(prompt, system_prompt)
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.warning(f"事件配置LLM生成失败: {e}, 使用默认配置")
             return {
                 "hot_topics": [],
@@ -875,6 +883,8 @@ class SimulationConfigGenerator:
             result = self._call_llm_with_retry(prompt, system_prompt)
             llm_configs = {cfg["agent_id"]: cfg for cfg in result.get("agent_configs", [])}
         except Exception as e:
+            if is_budget_exceeded_error(e):
+                raise
             logger.warning(f"Agent配置批次LLM生成失败: {e}, 使用规则生成")
             llm_configs = {}
         

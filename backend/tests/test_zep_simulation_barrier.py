@@ -305,6 +305,17 @@ def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_p
     monkeypatch.setattr(SimulationRunner, "SCRIPTS_DIR", str(scripts_dir))
     monkeypatch.setattr(runner_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
     monkeypatch.setattr(runner_module.threading, "Thread", BrokenThread)
+    # The test targets monitor startup failure, after local routing is ready.
+    # Avoid replacing the gateway's server thread with BrokenThread as well.
+    class ReadyGateway:
+        def client_env(self):
+            return {
+                "LLM_BASE_URL": "http://127.0.0.1:9999/v1",
+                "LLM_API_KEY": "test-gateway-token",
+                "LLM_MODEL_NAME": "test-local-model",
+            }
+
+    monkeypatch.setattr(runner_module, "get_local_gateway", lambda _sim_id: ReadyGateway())
     monkeypatch.setattr(
         SimulationRunner,
         "_terminate_process",
@@ -333,6 +344,122 @@ def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_p
         SimulationRunner._action_queues.pop(simulation_id, None)
         SimulationRunner._stdout_files.pop(simulation_id, None)
         SimulationRunner._stderr_files.pop(simulation_id, None)
+        SimulationRunner._graph_memory_enabled.pop(simulation_id, None)
+        SimulationRunner._local_gateways.pop(simulation_id, None)
+
+
+def test_exhausted_local_budget_stops_oasis_and_fails_run(monkeypatch, tmp_path):
+    simulation_id = "sim-budget-exhausted"
+    state = SimulationRunState(
+        simulation_id=simulation_id,
+        runner_status=RunnerStatus.RUNNING,
+    )
+    terminated = []
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    process = Process()
+
+    class Budget:
+        def snapshot(self):
+            return {"exhausted": True}
+
+        def ensure_settled(self):
+            raise RuntimeError("budget exhausted")
+
+    monkeypatch.setattr(SimulationRunner, "RUN_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        SimulationRunner,
+        "get_run_state",
+        classmethod(lambda _cls, _simulation_id: state),
+    )
+    monkeypatch.setattr(
+        SimulationRunner,
+        "_save_run_state",
+        classmethod(lambda _cls, _state: None),
+    )
+    monkeypatch.setattr(
+        SimulationRunner,
+        "_sync_simulation_status",
+        classmethod(lambda _cls, *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(
+        SimulationRunner,
+        "_terminate_process",
+        classmethod(
+            lambda _cls, _process, _sim_id: (
+                terminated.append(_sim_id),
+                setattr(_process, "returncode", 1),
+            )
+        ),
+    )
+    SimulationRunner._processes[simulation_id] = process
+    SimulationRunner._local_gateways[simulation_id] = SimpleNamespace(budget=Budget())
+    SimulationRunner._graph_memory_enabled[simulation_id] = False
+    try:
+        SimulationRunner._monitor_simulation(simulation_id)
+        assert terminated == [simulation_id]
+        assert state.runner_status == RunnerStatus.FAILED
+        assert "budget" in (state.error or "").lower()
+    finally:
+        SimulationRunner._processes.pop(simulation_id, None)
+        SimulationRunner._local_gateways.pop(simulation_id, None)
+        SimulationRunner._graph_memory_enabled.pop(simulation_id, None)
+
+
+def test_completed_oasis_process_releases_only_its_gateway(monkeypatch, tmp_path):
+    simulation_id = "sim-gateway-complete"
+    state = SimulationRunState(
+        simulation_id=simulation_id,
+        runner_status=RunnerStatus.RUNNING,
+    )
+    gateway = SimpleNamespace(budget=SimpleNamespace(ensure_settled=lambda: None))
+    released = []
+
+    class Process:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(SimulationRunner, "RUN_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        SimulationRunner,
+        "get_run_state",
+        classmethod(lambda _cls, _simulation_id: state),
+    )
+    monkeypatch.setattr(
+        SimulationRunner,
+        "_save_run_state",
+        classmethod(lambda _cls, _state: None),
+    )
+    monkeypatch.setattr(
+        SimulationRunner,
+        "_sync_simulation_status",
+        classmethod(lambda _cls, *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "release_local_gateway",
+        lambda run_id, *, expected: released.append(
+            (run_id, expected, state.runner_status)
+        ) or True,
+    )
+    SimulationRunner._processes[simulation_id] = Process()
+    SimulationRunner._local_gateways[simulation_id] = gateway
+    SimulationRunner._graph_memory_enabled[simulation_id] = False
+    try:
+        SimulationRunner._monitor_simulation(simulation_id)
+        assert state.runner_status == RunnerStatus.COMPLETED
+        assert released == [(simulation_id, gateway, RunnerStatus.RUNNING)]
+        assert simulation_id not in SimulationRunner._local_gateways
+    finally:
+        SimulationRunner._processes.pop(simulation_id, None)
+        SimulationRunner._local_gateways.pop(simulation_id, None)
         SimulationRunner._graph_memory_enabled.pop(simulation_id, None)
 
 

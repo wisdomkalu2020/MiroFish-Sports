@@ -41,9 +41,13 @@ def _positive_int(name: str, default: str) -> int:
 def _budget_for(run_id: str) -> RunBudget:
     if not _RUN_ID.fullmatch(run_id):
         raise ValueError("invalid project or simulation ID for local LLM run")
+    ledger_path = Path(Config.UPLOAD_FOLDER) / "llm_run_budgets.sqlite3"
+    existing = RunBudget.load_existing(ledger_path, run_id)
+    if existing is not None:
+        return existing
     cost_limit = os.environ.get("MIROFISH_RUN_COST_LIMIT_USD", "0")
     return RunBudget(
-        Path(Config.UPLOAD_FOLDER) / "llm_run_budgets.sqlite3",
+        ledger_path,
         run_id,
         token_limit=_positive_int("MIROFISH_RUN_TOKEN_LIMIT", "50000"),
         cost_limit_usd=cost_limit,

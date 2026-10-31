@@ -72,6 +72,7 @@ def test_oasis_model_routes_to_explicit_local_endpoint(script_name, function_nam
         api_key="local-test-credential",
         model_config_dict={"max_tokens": 8192 if script_name == "run_parallel_simulation.py" else 64},
         max_retries=0,
+        **({"timeout": 510} if script_name == "run_parallel_simulation.py" else {}),
     )
 
 

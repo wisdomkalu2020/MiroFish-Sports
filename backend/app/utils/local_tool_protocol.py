@@ -4,6 +4,7 @@ This does not execute tools. OASIS/CAMEL retain execution and tool memory.
 """
 import copy
 import json
+import os
 import uuid
 
 from jsonschema import validate
@@ -14,12 +15,19 @@ def encode_tools(payload):
     if not tools:
         return payload, None
     functions = {}
+    text_limit = int(os.environ.get('MIROFISH_LOCAL_TOOL_TEXT_LIMIT', '0'))
+    if text_limit < 0 or text_limit > 10000:
+        raise ValueError('MIROFISH_LOCAL_TOOL_TEXT_LIMIT must be between 0 and 10000')
     for tool in tools:
-        function = tool.get('function', {})
+        function = copy.deepcopy(tool.get('function', {}))
         name = function.get('name')
         if tool.get('type') != 'function' or not isinstance(name, str) or name in functions:
             raise ValueError('Only uniquely named function tools are supported')
         functions[name] = function
+        if text_limit:
+            for field, schema in function.get('parameters', {}).get('properties', {}).items():
+                if field in ('content', 'title') and schema.get('type') == 'string':
+                    schema['maxLength'] = min(schema.get('maxLength', text_limit), text_limit)
     choice = payload.get('tool_choice', 'auto')
     allowed = set(functions)
     if isinstance(choice, dict):
@@ -38,6 +46,7 @@ def encode_tools(payload):
         '{"kind":"tool","name":"tool_name","arguments":{...}}. '
         'Use the exact function name and valid arguments from these schemas. '
         'Do not describe code or invent a tool result. '
+        + (f'Keep post/comment text concise, at most {text_limit} characters. ' if text_limit else '')
         + ('You MUST choose one tool. ' if required else
            'When no tool is needed return {"kind":"message","content":"your reply"}. ')
         + ('No tool may be chosen. ' if choice == 'none' else '')
@@ -56,7 +65,24 @@ def encode_tools(payload):
             })}
         messages.append(message)
     result['messages'] = messages
-    result['response_format'] = {'type': 'json_object'}
+    variants = []
+    if choice != 'none':
+        for name in sorted(allowed):
+            variants.append({
+                'type': 'object', 'properties': {
+                    'kind': {'const': 'tool'}, 'name': {'const': name},
+                    'arguments': functions[name].get('parameters', {'type': 'object'}),
+                }, 'required': ['kind', 'name', 'arguments'], 'additionalProperties': False,
+            })
+    if not required:
+        variants.append({
+            'type': 'object', 'properties': {
+                'kind': {'const': 'message'}, 'content': {'type': 'string'},
+            }, 'required': ['kind', 'content'], 'additionalProperties': False,
+        })
+    # llama.cpp converts this schema to a decoding grammar. Validation below
+    # remains authoritative: grammar support cannot establish factual accuracy.
+    result['response_format'] = {'type': 'json_object', 'schema': {'oneOf': variants}}
     return result, (functions, allowed, required, choice == 'none')
 
 

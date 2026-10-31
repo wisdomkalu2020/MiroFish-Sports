@@ -155,6 +155,21 @@
               <h3>{{ variantLabel(variant) }}</h3>
               <div v-for="[outcome, bins] in Object.entries(metric.calibration)" :key="outcome" class="calibration-group">
                 <h4>{{ outcome }}</h4>
+                <svg class="calibration-chart" viewBox="0 0 300 280" role="img" :aria-label="`${variantLabel(variant)} ${outcome}: predicted probability versus observed frequency`">
+                  <path d="M36 18 V238 H256" fill="none" stroke="#555" />
+                  <line x1="36" y1="238" x2="256" y2="18" stroke="#999" stroke-dasharray="4 4" />
+                  <polyline :points="calibrationPoints(bins)" fill="none" stroke="#b64d1c" stroke-width="2" />
+                  <circle v-for="bin in plottedBins(bins)" :key="bin.lower" :cx="36 + bin.mean_predicted * 220" :cy="238 - bin.observed_frequency * 220" r="3" fill="#b64d1c">
+                    <title>{{ bin.count }} matches; forecast {{ formatPercent(bin.mean_predicted) }}, observed {{ formatPercent(bin.observed_frequency) }}</title>
+                  </circle>
+                  <g font-size="10" fill="#444">
+                    <text x="36" y="252" text-anchor="middle">0</text><text x="146" y="252" text-anchor="middle">0.5</text><text x="256" y="252" text-anchor="middle">1</text>
+                    <text x="29" y="241" text-anchor="end">0</text><text x="29" y="131" text-anchor="end">0.5</text><text x="29" y="22" text-anchor="end">1</text>
+                    <text x="146" y="271" text-anchor="middle">Predicted probability</text>
+                    <text x="-128" y="11" transform="rotate(-90)" text-anchor="middle">Observed frequency</text>
+                  </g>
+                </svg>
+                <p class="note">Dashed line: perfect calibration. Small bins are noisy; see sample counts below.</p>
                 <div class="table-wrap">
                   <table>
                     <thead><tr><th>Probability band</th><th>Matches</th><th>Mean forecast</th><th>Observed frequency</th></tr></thead>
@@ -174,6 +189,7 @@
         </details>
         <p class="note">{{ report.result_availability_assumption }}</p>
       </section>
+      <SportsPaperLedger :league="selectedLeague" />
     </main>
   </div>
 </template>
@@ -181,9 +197,12 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import SportsPaperLedger from '../components/SportsPaperLedger.vue'
 import { createSportsDossier, importSportsHistory, listSportsHistory, runSportsEvaluation } from '../api/sportsEvaluation'
 
 const router = useRouter()
+const plottedBins = bins => bins.filter(bin => bin.count > 0 && Number.isFinite(bin.mean_predicted) && Number.isFinite(bin.observed_frequency))
+const calibrationPoints = bins => plottedBins(bins).map(bin => `${36 + bin.mean_predicted * 220},${238 - bin.observed_frequency * 220}`).join(' ')
 const leagues = ref([])
 const selectedLeague = ref('EPL')
 const season = ref('2025-26')
@@ -315,6 +334,7 @@ onMounted(loadLeagues)
 </script>
 
 <style scoped>
+.calibration-chart { display: block; width: 100%; max-width: 360px; height: auto; margin: 12px 0; }
 .sports-page { min-height: 100vh; background: #f6f6f3; color: #181818; }
 .sports-header { background: #101010; color: white; min-height: 60px; padding: 0 clamp(20px, 4vw, 48px); display: flex; align-items: center; justify-content: space-between; }
 .sports-header a { color: white; text-decoration: none; }

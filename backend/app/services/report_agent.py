@@ -1247,6 +1247,24 @@ class ReportAgent:
             progress_callback("planning", 30, t('progress.generatingOutline'))
         
         system_prompt = f"{PLAN_SYSTEM_PROMPT}\n\n{get_language_instruction()}"
+        outline_options = {}
+        if self.sports_forecast is not None:
+            system_prompt += (
+                "\nFor this sports report, plan exactly two concise sections: "
+                "pre-cutoff evidence and synthetic analysis; uncertainty and validation limits. "
+                "The validated probability table is appended separately."
+            )
+            outline_options['json_schema'] = {
+                'type': 'object', 'required': ['title', 'summary', 'sections'],
+                'properties': {
+                    'title': {'type': 'string', 'maxLength': 120},
+                    'summary': {'type': 'string', 'maxLength': 400},
+                    'sections': {'type': 'array', 'minItems': 2, 'maxItems': 2,
+                        'items': {'type': 'object', 'required': ['title'],
+                            'properties': {'title': {'type': 'string', 'maxLength': 120}},
+                            'additionalProperties': False}},
+                }, 'additionalProperties': False,
+            }
         user_prompt = PLAN_USER_PROMPT_TEMPLATE.format(
             simulation_requirement=self.simulation_requirement,
             total_nodes=context.get('graph_statistics', {}).get('total_nodes', 0),
@@ -1262,7 +1280,8 @@ class ReportAgent:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3
+                temperature=0.3,
+                **outline_options,
             )
             
             if progress_callback:

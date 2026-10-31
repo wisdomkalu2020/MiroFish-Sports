@@ -263,3 +263,24 @@ def test_chat_json_reports_missing_choices_without_retrying_forever():
         )
 
     assert len(sequence.calls) == 2
+
+@pytest.mark.parametrize('provider', ['local', 'openai'])
+def test_schema_output_is_validated_even_without_native_grammar(monkeypatch, provider):
+    monkeypatch.setattr(Config, 'LLM_PROVIDER', provider)
+    schema = {'type': 'object', 'properties': {'vote': {'type': 'number'}}, 'required': ['vote']}
+    sequence = CompletionSequence(_response('{"vote": "invalid"}'))
+    with pytest.raises(LLMResponseError, match='requested schema'):
+        _client_for(sequence).chat_json(messages=[{'role': 'user', 'content': 'Vote'}], json_schema=schema)
+    assert ('schema' in sequence.calls[0]['response_format']) == (provider == 'local')
+
+
+def test_schema_validation_survives_provider_format_fallback(monkeypatch):
+    monkeypatch.setattr(Config, 'LLM_PROVIDER', 'local')
+    sequence = CompletionSequence(
+        ProviderError(status_code=400, body={'error': {'param': 'response_format', 'message': 'unsupported response_format'}}),
+        _response('{"vote": "invalid"}'),
+    )
+    with pytest.raises(LLMResponseError, match='requested schema'):
+        _client_for(sequence).chat_json(messages=[{'role': 'user', 'content': 'Vote'}],
+            json_schema={'type': 'object', 'properties': {'vote': {'type': 'number'}}})
+    assert len(sequence.calls) == 2

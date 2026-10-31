@@ -214,3 +214,20 @@ def test_released_oasis_gateway_reopens_with_persisted_budget(monkeypatch, tmp_p
         local_llm_runtime.release_local_gateway(run_id, report=True)
 
     assert all(handle.closed for handle in created)
+
+def test_reopened_run_keeps_its_limits_after_environment_change(tmp_path, monkeypatch):
+    from app.utils.run_budget import BudgetExceeded
+    monkeypatch.setattr(Config, 'UPLOAD_FOLDER', str(tmp_path))
+    monkeypatch.setenv('MIROFISH_RUN_TOKEN_LIMIT', '1000')
+    monkeypatch.setenv('MIROFISH_RUN_COST_LIMIT_USD', '0')
+    original = local_llm_runtime._budget_for('sim_persisted')
+    reservation = original.reserve(100, 20)
+    original.reconcile(reservation, 80, 10)
+    monkeypatch.setenv('MIROFISH_RUN_TOKEN_LIMIT', '999999')
+    reopened = local_llm_runtime._budget_for('sim_persisted')
+    assert reopened.snapshot()['token_limit'] == 1000
+    assert reopened.snapshot()['spent_tokens'] == 90
+    with pytest.raises(BudgetExceeded):
+        reopened.reserve(1000, 10)
+    assert local_llm_runtime._budget_for('sim_persisted').snapshot()['exhausted']
+    assert local_llm_runtime._budget_for('sim_new').snapshot()['token_limit'] == 999999

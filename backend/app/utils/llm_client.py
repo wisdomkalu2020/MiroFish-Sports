@@ -160,6 +160,7 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: Optional[int] = 4096,
         max_attempts: int = 1,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         发送聊天请求并返回JSON
@@ -176,7 +177,9 @@ class LLMClient:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
 
-        response_format: Optional[Dict[str, str]] = {"type": "json_object"}
+        response_format: Optional[Dict[str, Any]] = {"type": "json_object"}
+        if json_schema is not None and Config.LLM_PROVIDER == "local":
+            response_format["schema"] = json_schema
         last_error: Optional[LLMResponseError] = None
 
         for attempt in range(1, max_attempts + 1):
@@ -206,7 +209,16 @@ class LLMClient:
                 break
 
             try:
-                return self._parse_json_response(response)
+                parsed = self._parse_json_response(response)
+                if json_schema is not None:
+                    from jsonschema import validate, ValidationError
+                    try:
+                        validate(parsed, json_schema)
+                    except ValidationError as error:
+                        raise LLMResponseError(
+                            "LLM JSON response failed the requested schema"
+                        ) from error
+                return parsed
             except LLMResponseError as error:
                 last_error = error
                 if attempt >= max_attempts:

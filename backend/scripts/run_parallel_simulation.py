@@ -1007,6 +1007,9 @@ def create_model(config: Dict[str, Any]):
     context_tokens = int(os.environ.get("MIROFISH_LOCAL_CONTEXT_TOKENS", "8192"))
     if not 4096 <= context_tokens <= 131072:
         raise ValueError("MIROFISH_LOCAL_CONTEXT_TOKENS must be between 4096 and 131072")
+    request_timeout = int(os.environ.get("MIROFISH_LOCAL_REQUEST_TIMEOUT_SECONDS", "480"))
+    if not 1 <= request_timeout <= 900:
+        raise ValueError("MIROFISH_LOCAL_REQUEST_TIMEOUT_SECONDS must be between 1 and 900")
     return ModelFactory.create(
         model_platform=ModelPlatformType.OPENAI_COMPATIBLE_MODEL,
         model_type=llm_model,
@@ -1014,6 +1017,7 @@ def create_model(config: Dict[str, Any]):
         api_key=llm_api_key,
         model_config_dict={"max_tokens": context_tokens, **({"tool_choice": "required"} if config.get("sports_discussion_only") else {})},
         max_retries=0,
+        timeout=request_timeout + 30,
     )
 
 

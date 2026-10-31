@@ -79,6 +79,23 @@ class RunBudget:
         connection.execute("PRAGMA synchronous=FULL")
         return connection
 
+    @classmethod
+    def load_existing(cls, db_path: str | Path, run_id: str) -> "RunBudget | None":
+        """Reopen persisted limits; changed environment defaults affect new runs only."""
+        path = Path(db_path).resolve()
+        if not path.is_file():
+            return None
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=30)) as connection:
+            connection.row_factory = sqlite3.Row
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'").fetchone() is None:
+                return None
+            row = connection.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        if row is None:
+            return None
+        return cls(path, run_id, row['token_limit'],
+            cost_limit_usd=None if row['cost_limit_nanousd'] is None else Decimal(row['cost_limit_nanousd']) / _NANOUSD,
+            input_cost_per_1k_usd=row['input_price'], output_cost_per_1k_usd=row['output_price'])
+
     def _initialize(self) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute(

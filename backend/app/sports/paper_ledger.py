@@ -307,6 +307,8 @@ class PaperLedger:
         clv = taken_price / closing_price - 1 if closing_price and status != "void_corrected_kickoff" else None
         return {
             "prediction_id": prediction_id, "match_id": match_id,
+            "sport": prediction["sport"], "league": prediction["league"],
+            "home_team": prediction["home_team"], "away_team": prediction["away_team"],
             "recorded_at": prediction_event["recorded_at"],
             "kickoff_known_at_prediction": prediction["kickoff_known_at_prediction"],
             "latest_kickoff_at": _iso(actual_kickoff),
@@ -342,3 +344,14 @@ class PaperLedger:
                                   "AND match_id = ? ORDER BY recorded_at, rowid",
                                   (match_id,)).fetchall()
         return tuple(self.prediction_report(row["event_id"]) for row in rows)
+
+    def get_quote(self, quote_id: str) -> dict:
+        row, payload = self._event(quote_id, "quote")
+        return {**payload, "quote_id": row["event_id"], "match_id": row["match_id"],
+                "recorded_at": row["recorded_at"], "market_implied_probabilities":
+                devig_decimal_odds(payload["decimal_odds"], outcomes_for(payload["sport"], payload["league"]))}
+
+    def list_quotes(self) -> tuple[dict, ...]:
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT event_id FROM events WHERE kind='quote' ORDER BY recorded_at DESC, rowid DESC LIMIT 200").fetchall()
+        return tuple(self.get_quote(row["event_id"]) for row in rows)

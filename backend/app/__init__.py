@@ -65,11 +65,13 @@ def create_app(config_class=Config):
     # 注册蓝图
     from .api import graph_bp, simulation_bp, report_bp, sports_bp
     from .api.sports_evaluation import sports_evaluation_bp
+    from .api.sports_paper import sports_paper_bp
     app.register_blueprint(graph_bp, url_prefix='/api/graph')
     app.register_blueprint(simulation_bp, url_prefix='/api/simulation')
     app.register_blueprint(report_bp, url_prefix='/api/report')
     app.register_blueprint(sports_bp, url_prefix='/api/sports')
     app.register_blueprint(sports_evaluation_bp, url_prefix='/api/sports/evaluation')
+    app.register_blueprint(sports_paper_bp, url_prefix='/api/sports/paper')
     
     # 健康检查
     @app.route('/health')

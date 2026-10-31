@@ -390,6 +390,19 @@ def collect_sports_votes(
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 temperature=0.2,
                 max_tokens=256,
+                json_schema={
+                    "type": "object", "additionalProperties": False,
+                    "required": ["adjustments", "fact_ids", "rationale"],
+                    "properties": {
+                        "adjustments": {"type": "object", "additionalProperties": False,
+                            "required": list(outcomes), "properties": {
+                                key: {"type": "number", "minimum": -0.10, "maximum": 0.10}
+                                for key in outcomes}},
+                        "fact_ids": {"type": "array", "minItems": 1, "maxItems": 3,
+                            "items": {"type": "string", "enum": list(prompt_facts)}},
+                        "rationale": {"type": "string", "minLength": 1, "maxLength": 240},
+                    },
+                },
             )
             votes.append(_vote_from_json(
                 response, agent_id=agent_id, label=label, outcomes=outcomes,

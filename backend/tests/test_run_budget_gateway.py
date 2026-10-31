@@ -227,7 +227,8 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(reply["choices"][0]["finish_reason"], "tool_calls")
             forwarded = self.upstream.received[-1]
             self.assertNotIn("tools", forwarded)
-            self.assertEqual(forwarded["response_format"], {"type": "json_object"})
+            self.assertEqual(forwarded["response_format"]["type"], "json_object")
+            self.assertIn("schema", forwarded["response_format"])
             self.assertEqual(forwarded["max_tokens"], 9)
             self.assertEqual(self.budget.snapshot()["spent_tokens"], 22)
             self.upstream.content = json.dumps({"kind": "tool", "name": "unknown", "arguments": {}})

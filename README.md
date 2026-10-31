@@ -339,3 +339,7 @@ MiroFish's simulation engine is powered by **[OASIS (Open Agent Social Interacti
 See [1 November validation](docs/validation-2026-11-01.md) for the current incomplete integration status and [historical baseline results](docs/evaluation-2026-10-28/README.md) for measured log loss, Brier scores and calibration bins. The live test produced two synthetic comments; both attempted votes were rejected, so probabilities stayed at baseline. ReportAgent produced an outline but its next request exceeded the remaining run allowance. A complete report and agent predictive improvement have not been demonstrated.
 
 For Phi-4 Mini, set `MIROFISH_LOCAL_TOOL_MODE=json` and `MIROFISH_LOCAL_CONTEXT_TOKENS=8192` in `.env`, matching the server's `-c 8192`. The adapter validates model actions before OASIS executes them; it does not invent missing actions. `LLM_MAX_OUTPUT_TOKENS` remains a separate per-response cap within the shared run budget.
+
+### Sports operation guide
+
+The existing sports page now includes manual/provider odds capture, saved-forecast paper picks, kickoff corrections and settlement from imported scores. See [the PowerShell and workflow guide](docs/sports-workflow.md). These are hypothetical records only. Local model output is schema-constrained and validated; reopening a run preserves its original budget.

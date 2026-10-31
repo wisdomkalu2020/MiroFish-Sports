@@ -224,6 +224,9 @@ def _discussion_by_agent(actions: Sequence[Mapping[str, Any]]) -> dict[int, list
         if not isinstance(content, str) or not content.strip():
             continue
         round_num = action.get("round")
+        # Round zero is manually seeded material, not an agent discussion.
+        if type(round_num) is not int or round_num < 1:
+            continue
         snippets[agent_id].append({
             "round": round_num if isinstance(round_num, int) else None,
             "text": " ".join(content.split())[:300],
@@ -344,6 +347,7 @@ def collect_sports_votes(
     ]
     votes: list[dict[str, Any]] = []
     rejected = 0
+    rejection_details: list[dict[str, Any]] = []
     seen_ids: set[int] = set()
     for index, profile in enumerate(selected, start=1):
         raw_id = profile.get("user_id")
@@ -397,6 +401,7 @@ def collect_sports_votes(
             if not isinstance(error, (SportsAgentError, LLMResponseError)):
                 raise
             rejected += 1
+            rejection_details.append({"agent_id": agent_id, "reason": str(error)})
 
     required = max(2, math.ceil(len(selected) / 2))
     if len(votes) < required:
@@ -431,6 +436,7 @@ def collect_sports_votes(
         "baseline_probabilities": baseline,
         "votes": votes,
         "rejected_vote_count": rejected,
+        "vote_rejection_details": rejection_details,
         "consensus": {
             "adjustments": adjustment,
             "fact_ids": consensus_facts,

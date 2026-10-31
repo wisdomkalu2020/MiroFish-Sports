@@ -294,12 +294,17 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
         return False, {"reason": "模拟目录不存在"}
     
     # 必要文件列表（不包括脚本，脚本位于 backend/scripts/）
-    required_files = [
-        "state.json",
-        "simulation_config.json",
-        "reddit_profiles.json",
-        "twitter_profiles.csv"
-    ]
+    required_files = ["state.json", "simulation_config.json"]
+    try:
+        import json
+        with open(os.path.join(simulation_dir, "state.json"), encoding="utf-8") as state_source:
+            platform_state = json.load(state_source)
+    except (OSError, ValueError) as error:
+        return False, {"reason": f"Cannot read simulation state: {error}"}
+    if platform_state.get("enable_reddit", True):
+        required_files.append("reddit_profiles.json")
+    if platform_state.get("enable_twitter", True):
+        required_files.append("twitter_profiles.csv")
     
     # 检查文件是否存在
     existing_files = []

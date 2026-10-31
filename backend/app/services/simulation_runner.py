@@ -405,10 +405,12 @@ class SimulationRunner:
         # Sports uses the same OASIS runner, with a small fixed discussion
         # budget. The generic MiroFish simulation retains its requested span.
         project_id = config.get("project_id")
+        sports_run = False
         if isinstance(project_id, str):
             from ..models.project import ProjectManager
 
             if is_sports_dossier(ProjectManager.get_extracted_text(project_id)):
+                sports_run = True
                 sports_max = sports_round_limit()
                 max_rounds = min(max_rounds, sports_max) if max_rounds and max_rounds > 0 else sports_max
 
@@ -490,6 +492,14 @@ class SimulationRunner:
             script_name = "run_parallel_simulation.py"
             state.twitter_running = True
             state.reddit_running = True
+
+        # The standalone runners do not emit actions.jsonl or simulation_end.
+        # Sports votes and memory require those records. Reuse the existing
+        # instrumented OASIS runner in its supported single-platform mode.
+        sports_platform_args = []
+        if sports_run and platform in ("twitter", "reddit"):
+            script_name = "run_parallel_simulation.py"
+            sports_platform_args = [f"--{platform}-only"]
         
         script_path = os.path.join(cls.SCRIPTS_DIR, script_name)
         
@@ -536,6 +546,7 @@ class SimulationRunner:
                 script_path,
                 "--config", config_path,  # 使用完整配置文件路径
             ]
+            cmd.extend(sports_platform_args)
             
             # 如果指定了最大轮数，添加到命令行参数
             if max_rounds is not None and max_rounds > 0:

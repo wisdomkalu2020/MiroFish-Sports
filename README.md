@@ -131,10 +131,10 @@ Run a local OpenAI-compatible server with the Phi-4 Mini GGUF before starting Mi
 ```powershell
 $llamaServer = 'C:\path\to\llama-server.exe'
 $gguf = 'C:\path\to\Phi-4-mini-instruct-Q4_K_M.gguf'
-& $llamaServer -m $gguf -c 4096 -t 4 -np 1 --host 127.0.0.1 --port 8080 --alias phi4-mini --jinja
+& $llamaServer -m $gguf -c 8192 -t 4 -np 1 --host 127.0.0.1 --port 8080 --alias phi4-mini --jinja
 ```
 
-MiroFish creates an authenticated local gateway and persists one token budget per project or simulation run. Ontology, persona/config generation, OASIS agent turns, and ReportAgent use the same budget for their run. The OASIS listener closes when its subprocess finishes; ReportAgent opens a separate listener against the persisted budget. The model server alone does not replace Zep Cloud graph memory; a full MiroFish simulation still needs `ZEP_API_KEY`. This local Phi-4 Mini setup is the supported route for complete simulations; remote provider settings do not yet cover the OASIS subprocess.
+MiroFish creates an authenticated local gateway and persists one token budget per project or simulation run. Ontology, persona/config generation, OASIS agent turns, and ReportAgent use the same budget for their run. The OASIS listener closes when its subprocess finishes; ReportAgent opens a separate listener against the persisted budget. The model server alone does not replace Zep Cloud graph memory; a full MiroFish simulation still needs `ZEP_API_KEY`. The local Phi-4 Mini route covers the OASIS subprocess, but end-to-end validation remains incomplete. Remote provider settings do not yet cover that subprocess.
 
 Check the local model route without creating a Zep graph:
 
@@ -252,8 +252,12 @@ rounds (`MIROFISH_SPORTS_AGENT_COUNT` and `MIROFISH_SPORTS_MAX_ROUNDS`).
 The small-sample backtest coordinator caps new Zep graphs at 3 by default
 (`MIROFISH_SPORTS_BACKTEST_MAX_GRAPHS`, range 1–10) and refuses historical
 agent projects without an explicit anonymized dossier marker. This run has
-no Zep key or archived historical dossiers, so agent predictive lift and
-model tokens per fully simulated match remain unmeasured.
+no archived historical dossiers, so agent predictive lift and model tokens
+per fully simulated match remain unmeasured. On 19 October 2026, a live Zep
+Cloud integration check passed graph creation, ontology setup, batch ingestion,
+pagination, search, temporal updates, and five synthetic agent-memory writes.
+This validates memory integration, not a complete sports simulation or forecast
+accuracy. See [the validation record](docs/validation-2026-10-19.md).
 
 #### 2. Install Dependencies
 
@@ -329,3 +333,9 @@ MiroFish's simulation engine is powered by **[OASIS (Open Agent Social Interacti
    <img alt="666ghj/MiroFish Star History Chart" src="static/image/star-history-light.svg" />
  </picture>
 </a>
+
+### Latest sports validation
+
+See [1 November validation](docs/validation-2026-11-01.md) for the current incomplete integration status and [historical baseline results](docs/evaluation-2026-10-28/README.md) for measured log loss, Brier scores and calibration bins. The live test produced two synthetic comments; both attempted votes were rejected, so probabilities stayed at baseline. ReportAgent produced an outline but its next request exceeded the remaining run allowance. A complete report and agent predictive improvement have not been demonstrated.
+
+For Phi-4 Mini, set `MIROFISH_LOCAL_TOOL_MODE=json` and `MIROFISH_LOCAL_CONTEXT_TOKENS=8192` in `.env`, matching the server's `-c 8192`. The adapter validates model actions before OASIS executes them; it does not invent missing actions. `LLM_MAX_OUTPUT_TOKENS` remains a separate per-response cap within the shared run budget.

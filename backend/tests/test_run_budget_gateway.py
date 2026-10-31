@@ -14,6 +14,7 @@ import sys
 import threading
 import types
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 import uuid
@@ -142,7 +143,8 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
         reply = {
             "id": "fake-local-response",
             "object": "chat.completion",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}}],
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": getattr(self.server, "content", "OK")}}],
         }
         if not self.server.omit_usage:
             reply["usage"] = {"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22}
@@ -208,6 +210,32 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.request(payload, token="wrong-token")[0], 401)
         self.assertEqual(self.request({**payload, "stream": True})[0], 400)
         self.assertEqual(len(self.upstream.received), 0)
+
+    def test_json_tool_transport_preserves_budget_and_rejects_invalid_actions(self):
+        payload = {
+            "model": "local-test-model", "messages": [{"role": "user", "content": "Synthetic test"}],
+            "max_tokens": 40, "tool_choice": "required",
+            "tools": [{"type": "function", "function": {
+                "name": "create_post", "parameters": {"type": "object",
+                    "properties": {"content": {"type": "string"}}, "required": ["content"]}}}],
+        }
+        self.upstream.content = json.dumps({"kind": "tool", "name": "create_post",
+                                            "arguments": {"content": "Synthetic only"}})
+        with patch.dict(os.environ, {"MIROFISH_LOCAL_TOOL_MODE": "json"}):
+            status, reply, _ = self.request(payload)
+            self.assertEqual(status, 200)
+            self.assertEqual(reply["choices"][0]["finish_reason"], "tool_calls")
+            forwarded = self.upstream.received[-1]
+            self.assertNotIn("tools", forwarded)
+            self.assertEqual(forwarded["response_format"], {"type": "json_object"})
+            self.assertEqual(forwarded["max_tokens"], 9)
+            self.assertEqual(self.budget.snapshot()["spent_tokens"], 22)
+            self.upstream.content = json.dumps({"kind": "tool", "name": "unknown", "arguments": {}})
+            status, reply, _ = self.request(payload)
+            self.assertEqual(status, 502)
+            self.assertEqual(reply["error"]["code"], "invalid_tool_response")
+            self.assertEqual(self.budget.snapshot()["spent_tokens"], 44)
+            self.assertEqual(self.budget.snapshot()["pending_requests"], 0)
 
     def test_budget_exceeded_is_openai_shaped_and_does_not_reach_model(self):
         self.gateway.close()

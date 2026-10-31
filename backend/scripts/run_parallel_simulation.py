@@ -1001,12 +1001,18 @@ def create_model(config: Dict[str, Any]):
     os.environ["OPENAI_BASE_URL"] = llm_base_url
     os.environ["OPENAI_API_BASE_URL"] = llm_base_url
     print(f"OASIS local model={llm_model}, base_url={llm_base_url}")
+    # CAMEL 0.2.78 uses max_tokens as its context-memory limit too.
+    # Give CAMEL the actual context window; the authenticated gateway still
+    # clamps generated output to LLM_MAX_OUTPUT_TOKENS before reservation/send.
+    context_tokens = int(os.environ.get("MIROFISH_LOCAL_CONTEXT_TOKENS", "8192"))
+    if not 4096 <= context_tokens <= 131072:
+        raise ValueError("MIROFISH_LOCAL_CONTEXT_TOKENS must be between 4096 and 131072")
     return ModelFactory.create(
         model_platform=ModelPlatformType.OPENAI_COMPATIBLE_MODEL,
         model_type=llm_model,
         url=llm_base_url,
         api_key=llm_api_key,
-        model_config_dict={"max_tokens": max_tokens},
+        model_config_dict={"max_tokens": context_tokens, **({"tool_choice": "required"} if config.get("sports_discussion_only") else {})},
         max_retries=0,
     )
 
@@ -1130,7 +1136,7 @@ async def run_twitter_simulation(
         agent_graph=result.agent_graph,
         platform=oasis.DefaultPlatformType.TWITTER,
         database_path=db_path,
-        semaphore=30,  # 限制最大并发 LLM 请求数，防止 API 过载
+        semaphore=1 if os.environ.get("LLM_PROVIDER") == "local" else 30,
     )
     
     await result.env.reset()
@@ -1179,6 +1185,9 @@ async def run_twitter_simulation(
         if initial_actions:
             await result.env.step(initial_actions)
             log_info(f"已发布 {len(initial_actions)} 条初始帖子")
+            # Seed posts were logged at round zero; advance the DB cursor so
+            # they cannot be mistaken for newly generated discussion later.
+            _, last_rowid = fetch_new_actions_from_db(db_path, last_rowid, agent_names)
     
     # 记录 round 0 结束
     if action_logger:
@@ -1303,7 +1312,7 @@ async def run_reddit_simulation(
     result.agent_graph = await generate_reddit_agent_graph(
         profile_path=profile_path,
         model=model,
-        available_actions=REDDIT_ACTIONS,
+        available_actions=[ActionType.CREATE_POST, ActionType.CREATE_COMMENT, ActionType.DO_NOTHING] if config.get("sports_discussion_only") else REDDIT_ACTIONS,
     )
     
     # 从配置文件获取 Agent 真实名称映射（使用 entity_name 而非默认的 Agent_X）
@@ -1321,7 +1330,7 @@ async def run_reddit_simulation(
         agent_graph=result.agent_graph,
         platform=oasis.DefaultPlatformType.REDDIT,
         database_path=db_path,
-        semaphore=30,  # 限制最大并发 LLM 请求数，防止 API 过载
+        semaphore=1 if os.environ.get("LLM_PROVIDER") == "local" else 30,
     )
     
     await result.env.reset()
@@ -1378,6 +1387,9 @@ async def run_reddit_simulation(
         if initial_actions:
             await result.env.step(initial_actions)
             log_info(f"已发布 {len(initial_actions)} 条初始帖子")
+            # Seed posts were logged at round zero; advance the DB cursor so
+            # they cannot be mistaken for newly generated discussion later.
+            _, last_rowid = fetch_new_actions_from_db(db_path, last_rowid, agent_names)
     
     # 记录 round 0 结束
     if action_logger:

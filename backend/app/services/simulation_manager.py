@@ -345,6 +345,8 @@ class SimulationManager:
             
             # 传入graph_id以启用Zep检索功能，获取更丰富的上下文
             generator = OasisProfileGenerator(graph_id=state.graph_id)
+            if sports_run:
+                generator.sports_dossier = document_text
             
             def profile_progress(current, total, msg):
                 if progress_callback:
@@ -467,7 +469,7 @@ class SimulationManager:
                         "Synthetic pre-match discussion. This is not a statement "
                         "by a real coach, player, referee, or team. Discuss only "
                         "the following dossier known by the cutoff:\n\n"
-                        + document_text[:1800]
+                        + document_text
                     ),
                     "poster_type": "Synthetic analyst",
                     "poster_agent_id": 0,
@@ -490,7 +492,11 @@ class SimulationManager:
             # 保存配置文件
             config_path = os.path.join(sim_dir, "simulation_config.json")
             with open(config_path, 'w', encoding='utf-8') as f:
-                f.write(sim_params.to_json())
+                from ..sports.discussion_schedule import apply_sports_discussion_schedule
+                config_data = apply_sports_discussion_schedule(
+                    json.loads(sim_params.to_json()), document_text
+                )
+                json.dump(config_data, f, ensure_ascii=False, indent=2)
             
             state.config_generated = True
             state.config_reasoning = sim_params.generation_reasoning

@@ -70,7 +70,7 @@ def test_oasis_model_routes_to_explicit_local_endpoint(script_name, function_nam
         model_type="phi4-mini",
         url="http://127.0.0.1:12345/v1",
         api_key="local-test-credential",
-        model_config_dict={"max_tokens": 64},
+        model_config_dict={"max_tokens": 8192 if script_name == "run_parallel_simulation.py" else 64},
         max_retries=0,
     )
 

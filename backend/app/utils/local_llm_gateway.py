@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import secrets
 import threading
 import urllib.error
@@ -229,6 +230,14 @@ def start_gateway(
             payload.pop("max_completion_tokens", None)
             payload["max_tokens"] = cap
             payload["stream"] = False
+            protocol = None
+            if os.environ.get('MIROFISH_LOCAL_TOOL_MODE', 'native') == 'json':
+                from .local_tool_protocol import encode_tools
+                try:
+                    payload, protocol = encode_tools(payload)
+                except (ValueError, TypeError, KeyError):
+                    self._error(400, 'invalid_tools', 'Invalid local tool specification')
+                    return
             estimate = _prompt_token_upper_estimate(payload)
             try:
                 reservation_id = budget.reserve(estimate, cap)
@@ -281,6 +290,13 @@ def start_gateway(
             if usage[0] > estimate or usage[1] > cap:
                 self._error(502, "budget_accounting_error", "local model exceeded reserved tokens")
                 return
+            if protocol is not None:
+                from .local_tool_protocol import decode_tools
+                try:
+                    reply = decode_tools(reply, protocol)
+                except Exception:
+                    self._error(502, 'invalid_tool_response', 'Local model returned invalid tool JSON; no action was executed')
+                    return
             self._send_json(200, reply)
 
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)

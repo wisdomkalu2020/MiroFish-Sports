@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 import json
 
@@ -270,7 +271,8 @@ def test_force_restart_does_not_continue_while_old_ingestion_is_pending(monkeypa
     assert cleanup_called == []
 
 
-def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_path):
+@pytest.mark.parametrize("sports,platform", [(False,"twitter"), (True,"twitter"), (True,"reddit")])
+def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_path, sports, platform):
     simulation_id = "sim-start-failure"
     sim_dir = tmp_path / "runs" / simulation_id
     scripts_dir = tmp_path / "scripts"
@@ -278,6 +280,7 @@ def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_p
     scripts_dir.mkdir()
     (sim_dir / "simulation_config.json").write_text(
         json.dumps({
+            "project_id": "proj-routing-test",
             "time_config": {
                 "total_simulation_hours": 1,
                 "minutes_per_round": 60,
@@ -286,6 +289,13 @@ def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_p
         encoding="utf-8",
     )
     (scripts_dir / "run_twitter_simulation.py").write_text("pass\n", encoding="utf-8")
+
+    (scripts_dir / "run_parallel_simulation.py").write_text("pass\n", encoding="utf-8")
+    from app.models.project import ProjectManager
+    monkeypatch.setattr(ProjectManager, "get_extracted_text", lambda _id:
+        "# Pre-match dossier: A vs B\n- Sport: football\n- Evidence cutoff (UTC): 2026-10-01"
+        if sports else "generic seed")
+    commands = []
 
     class Process:
         pid = 123
@@ -303,7 +313,7 @@ def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_p
     terminated = []
     monkeypatch.setattr(SimulationRunner, "RUN_STATE_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(SimulationRunner, "SCRIPTS_DIR", str(scripts_dir))
-    monkeypatch.setattr(runner_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+    monkeypatch.setattr(runner_module.subprocess, "Popen", lambda cmd, **_kwargs: (commands.append(cmd) or Process()))
     monkeypatch.setattr(runner_module.threading, "Thread", BrokenThread)
     # The test targets monitor startup failure, after local routing is ready.
     # Avoid replacing the gateway's server thread with BrokenThread as well.
@@ -331,9 +341,12 @@ def test_monitor_start_failure_terminates_the_spawned_process(monkeypatch, tmp_p
         with pytest.raises(RuntimeError, match="monitor failed"):
             SimulationRunner.start_simulation(
                 simulation_id,
-                platform="twitter",
+                platform=platform,
                 enable_graph_memory_update=False,
             )
+        expected = "run_parallel_simulation.py" if sports else "run_twitter_simulation.py"
+        assert Path(commands[0][1]).name == expected
+        assert (f"--{platform}-only" in commands[0]) == sports
         assert terminated == [simulation_id]
         assert simulation_id not in SimulationRunner._processes
         assert simulation_id not in SimulationRunner._action_queues

@@ -250,7 +250,8 @@ class OasisProfileGenerator:
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
         zep_api_key: Optional[str] = None,
-        graph_id: Optional[str] = None
+        graph_id: Optional[str] = None,
+        sports_dossier: Optional[str] = None,
     ):
         self.api_key, self.base_url, self.model_name = Config.resolve_llm_settings(
             api_key=api_key, base_url=base_url, model=model_name
@@ -266,6 +267,7 @@ class OasisProfileGenerator:
         self.zep_api_key = zep_api_key or Config.ZEP_API_KEY
         self.zep_client = None
         self.graph_id = graph_id
+        self.sports_dossier = sports_dossier
         
         if self.zep_api_key:
             try:
@@ -555,6 +557,8 @@ class OasisProfileGenerator:
         - 群体/机构实体：生成代表性账号设定
         """
         
+        if getattr(self, 'sports_dossier', None):
+            return self._generate_sports_profile(entity_name, entity_type)
         is_individual = self._is_individual_entity(entity_type)
         
         if is_individual:
@@ -628,6 +632,46 @@ class OasisProfileGenerator:
             entity_name, entity_type, entity_summary, entity_attributes
         )
     
+    def _generate_sports_profile(self, entity_name: str, entity_type: str) -> Dict[str, Any]:
+        """Generate an analytical role without generating factual biography.
+
+        Graph retrieval still runs, but only the immutable cutoff dossier can
+        supply facts. Free-form model text is never promoted into seed facts.
+        """
+        focuses = ('tactics', 'player_availability', 'team_form', 'rest_and_travel',
+                   'venue', 'data_quality')
+        response = create_chat_completion(
+            self.client, model=self.model_name,
+            messages=[
+                {'role': 'system', 'content':
+                 'Choose one analytical focus for a fictional pre-match sports agent. '
+                 'Return only JSON with one key, focus. Do not invent a biography or facts. '
+                 'Allowed focus values: ' + ', '.join(focuses)},
+                {'role': 'user', 'content': json.dumps({
+                    'entity': entity_name, 'entity_type': entity_type,
+                    'pre_cutoff_dossier': self.sports_dossier,
+                }, ensure_ascii=False)},
+            ], response_format={'type': 'json_object'}, temperature=0,
+            max_tokens=min(128, Config.LLM_MAX_OUTPUT_TOKENS),
+        )
+        if response.choices[0].finish_reason != 'stop':
+            raise ValueError('Sports persona selection did not finish normally')
+        selected = json.loads(extract_chat_completion_text(response))
+        focus = selected.get('focus') if isinstance(selected, dict) else None
+        if focus not in focuses:
+            raise ValueError('Sports persona returned an unsupported analytical focus')
+        return {
+            'bio': 'Fictional pre-match analytical perspective.',
+            'persona': (
+                'You are a fictional analytical perspective. Focus on ' + focus.replace('_', ' ') +
+                '. Use only the pre-cutoff dossier supplied with the simulation. '
+                'Unknown information must remain unknown. Do not invent personal history, '
+                'team history, injuries, abilities, tactics or first-hand statements. '
+                'Describe uncertainty and distinguish analysis from recorded facts.'
+            ),
+            'interested_topics': [focus],
+        }
+
     def _fix_truncated_json(self, content: str) -> str:
         """修复被截断的JSON（输出被max_tokens限制截断）"""
         import re
@@ -991,7 +1035,7 @@ class OasisProfileGenerator:
                 return idx, profile, None
                 
             except Exception as e:
-                if is_budget_exceeded_error(e):
+                if is_budget_exceeded_error(e) or getattr(self, 'sports_dossier', None):
                     raise
                 logger.error(f"生成实体 {entity.name} 的人设失败: {str(e)}")
                 # 创建一个基础profile
@@ -1050,7 +1094,7 @@ class OasisProfileGenerator:
                         logger.info(f"[{current}/{total}] 成功生成人设: {entity.name} ({entity_type})")
                         
                 except Exception as e:
-                    if is_budget_exceeded_error(e):
+                    if is_budget_exceeded_error(e) or getattr(self, 'sports_dossier', None):
                         raise
                     logger.error(f"处理实体 {entity.name} 时发生异常: {str(e)}")
                     with lock:

@@ -168,6 +168,9 @@ def test_invalid_votes_are_withheld_and_baseline_remains_primary():
         actions=actions, llm=llm, simulation_id="sim_1",
     )
     assert result["rejected_vote_count"] == 10
+    assert len(result["vote_rejection_details"]) == 10
+    assert result["vote_rejection_details"][0] == {
+        "agent_id": 0, "reason": "agent vote exceeds the ten-point bound"}
     assert result["votes"] == []
     assert result["final_probabilities"] == pytest.approx(_context()["baseline_probabilities"])
     assert "withheld" in " ".join(result["data_freshness_warnings"])
@@ -349,3 +352,12 @@ def test_sports_prepare_keeps_mirofish_persona_and_config_steps_but_labels_synth
     assert "Pre-match dossier" in data["event_config"]["initial_posts"][0]["content"]
     profile_data = json.loads((tmp_path / simulation.simulation_id / "reddit_profiles.json").read_text())
     assert all(item["name"].startswith("Synthetic Player perspective") for item in profile_data)
+
+
+def test_seed_posts_cannot_qualify_as_agent_discussion():
+    from app.sports.agent_layer import _discussion_by_agent
+    seed = {"agent_id": 0, "round": 0, "action_type": "CREATE_POST",
+            "action_args": {"content": "Seed dossier"}, "success": True}
+    assert _discussion_by_agent([seed]) == {}
+    genuine = dict(seed, round=1, action_args={"content": "Pre-match discussion"})
+    assert _discussion_by_agent([seed, genuine])[0][0]["text"] == "Pre-match discussion"

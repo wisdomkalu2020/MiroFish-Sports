@@ -35,6 +35,24 @@ from .zep_tools import (
 logger = get_logger('mirofish.report_agent')
 
 
+def local_report_observation(result: str) -> str:
+    """Bound local-model evidence excerpts; full results remain in agent logs."""
+    if Config.LLM_PROVIDER != "local":
+        return result
+    limit = int(os.environ.get("MIROFISH_LOCAL_REPORT_OBSERVATION_BYTES", "1000"))
+    if not 256 <= limit <= 16000:
+        raise ValueError("MIROFISH_LOCAL_REPORT_OBSERVATION_BYTES must be 256..16000")
+    encoded = result.encode("utf-8")
+    if len(encoded) <= limit:
+        return result
+    excerpt = encoded[:limit].decode("utf-8", errors="ignore")
+    return excerpt + (
+        "\n[Evidence excerpt truncated for the local context window. "
+        "Full tool output is retained in the report log. Do not infer omitted "
+        "facts; use a focused follow-up query or state that evidence is insufficient.]"
+    )
+
+
 class ReportLogger:
     """
     Report Agent 详细日志记录器
@@ -1566,7 +1584,7 @@ class ReportAgent:
                     "role": "user",
                     "content": REACT_OBSERVATION_TEMPLATE.format(
                         tool_name=call["name"],
-                        result=result,
+                        result=local_report_observation(result),
                         tool_calls_count=tool_calls_count,
                         max_tool_calls=self.MAX_TOOL_CALLS_PER_SECTION,
                         used_tools_str=", ".join(used_tools),

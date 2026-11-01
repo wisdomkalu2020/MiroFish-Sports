@@ -54,6 +54,13 @@ Open `http://127.0.0.1:3000/sports/evaluation`. This is part of the existing Mir
 
 The sports report uses the existing ReportAgent planning, Zep research and writing loop with a two-section outline. The validated numerical forecast is appended separately. Invalid votes cannot alter the baseline. Local schema decoding helps formatting; the validator still checks bounds, outcome keys, fact IDs and the zero-sum adjustment rule.
 
+For local inference, `MIROFISH_LOCAL_REPORT_OBSERVATION_BYTES` defaults to 1000.
+It limits tool-result excerpts in the report prompt; full results remain in the
+report log. Truncation is explicitly disclosed to the model. Long accumulated
+conversations may still exceed the model context; the latest live report did
+not complete, and this mitigation still needs an end-to-end retry. Passing the
+vote validator does not prove that the model's prose correctly interprets facts.
+
 ## Odds and paper records
 
 On the same sports page, expand **Odds and paper ledger**:

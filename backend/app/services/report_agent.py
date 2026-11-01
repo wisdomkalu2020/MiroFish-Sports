@@ -915,6 +915,7 @@ class ReportAgent:
         llm_client: Optional[LLMClient] = None,
         zep_tools: Optional[ZepToolsService] = None,
         sports_forecast: Optional[Dict[str, Any]] = None,
+        llm_run_id: Optional[str] = None,
     ):
         """
         初始化Report Agent
@@ -928,6 +929,9 @@ class ReportAgent:
         """
         self.graph_id = graph_id
         self.simulation_id = simulation_id
+        # Explicit operator-authorized report retries may have a separate ledger.
+        # Normal API calls keep the original shared simulation budget.
+        self.llm_run_id = llm_run_id or simulation_id
         self.sports_forecast = sports_forecast
         if sports_forecast is None:
             self.simulation_requirement = simulation_requirement
@@ -957,7 +961,7 @@ class ReportAgent:
             from ..utils.local_llm_context import use_llm_settings
             from ..utils.local_llm_runtime import get_local_gateway
 
-            gateway = get_local_gateway(simulation_id, report=True)
+            gateway = get_local_gateway(self.llm_run_id, report=True)
             with use_llm_settings({
                 'api_key': gateway.api_key,
                 'base_url': gateway.base_url,
@@ -1838,7 +1842,10 @@ class ReportAgent:
                     from ..utils.local_llm_runtime import local_run_budget_snapshot
 
                     self.sports_forecast["total_run_tokens_at_report"] = (
-                        local_run_budget_snapshot(self.simulation_id)["spent_tokens"]
+                        local_run_budget_snapshot(self.llm_run_id)["spent_tokens"]
+                    )
+                    self.sports_forecast["report_uses_separate_budget"] = (
+                        self.llm_run_id != self.simulation_id
                     )
                 report.markdown_content += "\n\n" + render_sports_forecast_section(
                     self.sports_forecast

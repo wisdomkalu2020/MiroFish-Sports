@@ -153,6 +153,11 @@ def test_agent_votes_use_oasis_rounds_and_remain_bounded():
     assert "not statements by real coaches" in section
     report = label_synthetic_report("# Match report\n\nNarrative")
     assert report.index("Synthetic pre-match simulation") < report.index("Narrative")
+    assert "Unverified model narrative" in report
+    assert "does not verify the model's reasoning" in report
+    result['total_run_tokens_at_report'] = 123
+    result['report_uses_separate_budget'] = True
+    assert 'Report-retry local-model tokens (excludes earlier runs): 123.' in render_sports_forecast_section(result)
 
 
 def test_invalid_votes_are_withheld_and_baseline_remains_primary():

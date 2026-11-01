@@ -1313,6 +1313,13 @@ class ZepToolsService:
             interview_topic=interview_requirement,
             interview_questions=custom_questions or []
         )
+
+        if not SimulationRunner.check_env_alive(simulation_id):
+            result.summary = (
+                "Follow-up interviews unavailable: the OASIS environment is closed. "
+                "No interview answers were generated; use the saved discussion only."
+            )
+            return result
         
         # Step 1: 读取人设文件
         profiles = self._load_agent_profiles(simulation_id)

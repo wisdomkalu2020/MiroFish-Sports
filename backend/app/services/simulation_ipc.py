@@ -278,6 +278,14 @@ class SimulationIPCClient:
             return False
         
         try:
+            run_file = os.path.join(self.simulation_dir, "run_state.json")
+            if os.path.exists(run_file):
+                with open(run_file, 'r', encoding='utf-8') as f:
+                    run_state = json.load(f)
+                # The monitor writes terminal status after the worker exits.
+                # Forced termination may leave an old alive environment file.
+                if run_state.get("runner_status") in {"completed", "stopped", "failed"}:
+                    return False
             with open(status_file, 'r', encoding='utf-8') as f:
                 status = json.load(f)
             return status.get("status") == "alive"

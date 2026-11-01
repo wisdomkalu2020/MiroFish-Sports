@@ -529,9 +529,13 @@ def render_sports_forecast_section(forecast: Mapping[str, Any]) -> str:
             f"Agent-vote model tokens for this match: {forecast['agent_vote_tokens']}."
         )
     if isinstance(forecast.get("total_run_tokens_at_report"), int):
+        token_label = (
+            "Report-retry local-model tokens (excludes earlier runs): "
+            if forecast.get("report_uses_separate_budget")
+            else "Total metered local-model tokens through this report: "
+        )
         rows.append(
-            "Total metered local-model tokens through this report: "
-            f"{forecast['total_run_tokens_at_report']}."
+            token_label + f"{forecast['total_run_tokens_at_report']}."
         )
     catalog = forecast.get("fact_catalog", {})
     cited = forecast["consensus"].get("fact_ids", [])
@@ -556,7 +560,12 @@ def label_synthetic_report(content: str) -> str:
         "> **Synthetic pre-match simulation.** All OASIS agent posts, "
         "interviews, and votes are fictional analytical perspectives. "
         "They are not statements by real coaches, players, referees, "
-        "or teams. Only the pre-cutoff dossier supplies factual evidence."
+        "or teams. Only the pre-cutoff dossier supplies factual evidence.\n\n"
+        "> **Unverified model narrative.** Prose may contain unsupported claims "
+        "or misinterpret probability adjustments. The structured forecast table "
+        "below is the authoritative record of computed probabilities; it does "
+        "not establish predictive accuracy. Numeric and fact-ID validation does "
+        "not verify the model's reasoning."
     )
     title_end = content.find("\n")
     if title_end >= 0:

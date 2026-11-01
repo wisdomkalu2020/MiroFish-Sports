@@ -57,9 +57,10 @@ The sports report uses the existing ReportAgent planning, Zep research and writi
 For local inference, `MIROFISH_LOCAL_REPORT_OBSERVATION_BYTES` defaults to 1000.
 It limits tool-result excerpts in the report prompt; full results remain in the
 report log. Truncation is explicitly disclosed to the model. Long accumulated
-conversations may still exceed the model context; the latest live report did
-not complete, and this mitigation still needs an end-to-end retry. Passing the
-vote validator does not prove that the model's prose correctly interprets facts.
+conversations may still exceed the model context. The 2 November report retry
+completed, but its narrative failed quality review. Passing the vote validator
+does not prove that the model's prose correctly interprets facts. See the
+[validation record](validation-2026-11-02.md) before using its output.
 
 ## Odds and paper records
 
